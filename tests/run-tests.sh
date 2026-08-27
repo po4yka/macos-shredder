@@ -216,21 +216,25 @@ phase_g_host_command_isolation() {
 
 phase_h_user_owner_commands() {
   local sb="$WORK/sandbox-h" bin="$WORK/sandbox-h-bin" calls="$WORK/phase-h-sudo.log"
-  local log="$WORK/phase-h.log" rc=0
+  local sqlite_calls="$WORK/phase-h-sqlite.log" log="$WORK/phase-h.log" rc=0
   bash "$CREATE_ARTIFACTS" "$sb" >"$WORK/phase-h-create.log"
   mkdir -p "$bin"
   # shellcheck disable=SC2016 # $1 expands when the generated stub runs
   printf '#!/bin/sh\ncase "$1" in\n  -f) printf "?\\n" ;;\n  -c) printf "4242\\n" ;;\nesac\n' >"$bin/stat"
   printf '#!/bin/sh\nprintf "999\\n"\n' >"$bin/id"
   # shellcheck disable=SC2016 # variables expand when the generated stub runs
-  printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "$SHREDDER_TARGET_COMMAND_LOG"\nshift 3\nexec "$@"\n' >"$bin/sudo"
-  chmod +x "$bin/stat" "$bin/id" "$bin/sudo"
+  printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "$SHREDDER_TARGET_COMMAND_LOG"\nshift 3\nSHREDDER_VIA_SUDO=1 exec "$@"\n' >"$bin/sudo"
+  # shellcheck disable=SC2016 # variables expand when the generated stub runs
+  printf '#!/bin/sh\nprintf "%%s:%%s\\n" "${SHREDDER_VIA_SUDO:-direct}" "$*" >> "$SHREDDER_SQLITE_CALL_LOG"\ncase "$*" in *"SELECT name FROM sqlite_master"*) printf "ZOBJECT\\nZSTRUCTUREDMETADATA\\n" ;; esac\n' >"$bin/sqlite3"
+  chmod +x "$bin/stat" "$bin/id" "$bin/sudo" "$bin/sqlite3"
   info 'running: user-home mutations must use the owner UID command wrapper'
-  PATH="$bin:$PATH" SHREDDER_TARGET_COMMAND_LOG="$calls" SHREDDER_ROOT="$sb" \
-    bash "$SHREDDER" --force --modules shell >"$log" 2>&1 || rc=$?
+  PATH="$bin:$PATH" SHREDDER_TARGET_COMMAND_LOG="$calls" \
+    SHREDDER_SQLITE_CALL_LOG="$sqlite_calls" SHREDDER_ROOT="$sb" \
+    bash "$SHREDDER" --force --modules shell,usage >"$log" 2>&1 || rc=$?
   info "exit code: $rc (expected 0)"
   [ "$rc" -eq 0 ] \
     && grep -q -- '-u #4242 --' "$calls" \
+    && ! grep -q '^direct:.*Users/' "$sqlite_calls" \
     && [ ! -s "$sb/Users/alice/.zsh_history" ]
 }
 

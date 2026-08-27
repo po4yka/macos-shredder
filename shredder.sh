@@ -1187,10 +1187,11 @@ module_fileevents() {
 # --- module: usage -----------------------------------------------------------
 purge_knowledge_db() {
     local db="$1"
-    local tbl tables
+    local tbl tables sqlite_bin
     guard_mutation_target "$db" || return 0
     [ -f "$db" ] || return 0
-    if ! command -v sqlite3 >/dev/null 2>&1; then
+    sqlite_bin="$(command -v sqlite3 2>/dev/null || true)"
+    if [ -z "$sqlite_bin" ]; then
         log_debug "sqlite3 unavailable; removing KnowledgeC database instead: $db"
         remove_sqlite_db "$db"
         return 0
@@ -1200,7 +1201,7 @@ purge_knowledge_db() {
         CLEANED_COUNT=$((CLEANED_COUNT + 1))
         return 0
     fi
-    tables="$(sqlite3 "$db" \
+    tables="$(run_target_command "$db" "$sqlite_bin" "$db" \
         "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('ZOBJECT','ZSTRUCTUREDMETADATA');" \
         2>/dev/null || true)"
     while IFS= read -r tbl; do
