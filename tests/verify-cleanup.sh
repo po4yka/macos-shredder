@@ -292,7 +292,9 @@ run_force_checks() { # run_force_checks <root>
   # homes that enumerators must skip stay untouched
   for sp in 'Shared' 'Guest' '.hiddenuser'; do
     check_history_survives "skipped home untouched: Users/$sp" "$root/Users/$sp/.zsh_history"
+    check_exists_file "skipped home .DS_Store untouched: Users/$sp" "$root/Users/$sp/.DS_Store"
   done
+  check_exists_file 'top-level Users/.DS_Store untouched' "$root/Users/.DS_Store"
   check_history_survives 'linked home untouched: Users/mallory' \
     "$root/escape-target/mallory-home/.zsh_history"
   check_exists_file 'symlink escape target survives browser cleanup' \

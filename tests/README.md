@@ -27,7 +27,7 @@ filesystem with two simulated users:
 - `Users/mallory` is a symlink to an escape sentinel and must never be
   traversed by root cleanup.
 - `Users/Shared`, `Users/Guest`, `Users/.hiddenuser` — homes that enumerators
-  must **skip**; their history files must survive cleaning untouched.
+  must **skip**; their history and `.DS_Store` files must survive untouched.
 
 System-level fixtures:
 

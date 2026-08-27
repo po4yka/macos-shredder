@@ -243,7 +243,9 @@ main() {
   for special in 'Shared' 'Guest' '.hiddenuser'; do
     mkdir -p "$root/Users/$special"
     printf 'must survive cleaning %s\n' "$MARK_HIST" > "$root/Users/$special/.zsh_history"
+    printf 'must survive dsstore cleaning %s\n' "$MARK_HIST" > "$root/Users/$special/.DS_Store"
   done
+  printf 'must survive top-level dsstore cleaning %s\n' "$MARK_HIST" > "$root/Users/.DS_Store"
 
   printf '[artifacts] building system logs and diagnostic reports\n'
   mkdir -p "$root/var/log" "$root/Library/Logs/DiagnosticReports"

@@ -1340,14 +1340,17 @@ clean_dsstore_tree() {
 }
 
 module_dsstore() {
-    local vol
-    # User homes are the useful default scope. Avoid the previous full-root
-    # walk; mounted volumes stay opt-in.
-    clean_dsstore_tree "$USERS_DIR"
-    if [ "$TEST_MODE" -eq 1 ]; then
-        # The sandbox models the APFS Data view as a separate tree.
-        clean_dsstore_tree "$DATA_VOLUME/Users"
-    fi
+    local u h uid vol
+    # User homes are the useful default scope; Shared, Guest, hidden entries,
+    # and linked homes stay excluded by the common enumerator.
+    while IFS=$'\t' read -r u h uid; do
+        [ -d "$h" ] || continue
+        clean_dsstore_tree "$h"
+        if [ "$TEST_MODE" -eq 1 ]; then
+            # The sandbox models the APFS Data view as a separate tree.
+            clean_dsstore_tree "$DATA_VOLUME/Users/$u"
+        fi
+    done < <(enumerate_users)
     if [ "$INCLUDE_VOLUMES" -eq 1 ]; then
         for vol in "$SANDBOX"/Volumes/*/; do
             [ -d "$vol" ] || continue
