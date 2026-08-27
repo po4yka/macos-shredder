@@ -309,6 +309,16 @@ remove_path() {
     return 0
 }
 
+# remove_sqlite_db DB_FILE - remove a database and its rollback/WAL sidecars.
+remove_sqlite_db() {
+    local db="$1"
+    local suffix
+    [ -n "$db" ] || return 0
+    for suffix in '' -wal -shm -journal; do
+        remove_path "$db$suffix"
+    done
+}
+
 # truncate_file PATH - empty an existing regular file in place.
 truncate_file() {
     local target="$1"
@@ -387,7 +397,7 @@ sqlite_purge() {
     sqlite_bin="$(command -v sqlite3 2>/dev/null || true)"
     if [ -z "$sqlite_bin" ]; then
         log_debug "sqlite3 unavailable; removing database instead: $db"
-        remove_path "$db"
+        remove_sqlite_db "$db"
         return 0
     fi
     if [ "$DRY_RUN" -eq 1 ]; then
@@ -886,7 +896,7 @@ module_shell() {
 .rsync_history
 SHELL_HISTORIES
         clear_dir_contents "$h/.bash_sessions"
-        truncate_file "$h/.ipython/profile_default/history.sqlite"
+        remove_sqlite_db "$h/.ipython/profile_default/history.sqlite"
         truncate_file "$h/.julia/logs/repl_history.jl"
         truncate_file "$h/.ghc/ghci_history"
         if [ -d "$h/.matlab" ]; then
@@ -1152,7 +1162,7 @@ purge_knowledge_db() {
     [ -f "$db" ] || return 0
     if ! command -v sqlite3 >/dev/null 2>&1; then
         log_debug "sqlite3 unavailable; removing KnowledgeC database instead: $db"
-        remove_path "$db"
+        remove_sqlite_db "$db"
         return 0
     fi
     if [ "$DRY_RUN" -eq 1 ]; then

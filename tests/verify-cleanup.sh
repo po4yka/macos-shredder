@@ -211,7 +211,10 @@ check_user_artifacts_cleaned() { # check_user_artifacts_cleaned <label> <home>
   check_gone_or_empty "$label: .zsh_history emptied/gone" "$home/.zsh_history"
   check_gone_or_empty "$label: .bash_history emptied/gone" "$home/.bash_history"
   check_dir_no_files "$label: .bash_sessions emptied" "$home/.bash_sessions"
-  check_gone_or_empty "$label: ipython history emptied/gone" "$home/.ipython/profile_default/history.sqlite"
+  check_gone "$label: ipython history database gone" "$home/.ipython/profile_default/history.sqlite"
+  check_gone "$label: ipython history WAL gone" "$home/.ipython/profile_default/history.sqlite-wal"
+  check_gone "$label: ipython history SHM gone" "$home/.ipython/profile_default/history.sqlite-shm"
+  check_gone "$label: ipython history journal gone" "$home/.ipython/profile_default/history.sqlite-journal"
 
   # trash, including the hidden leak
   check_gone "$label: trash file.txt gone" "$home/.Trash/file.txt"

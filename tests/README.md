@@ -45,8 +45,8 @@ System-level fixtures:
 
 Per-user fixtures:
 
-- Shell histories: `.zsh_history`, `.bash_history`, `.bash_sessions/`,
-  `.ipython/profile_default/history.sqlite`.
+- Shell histories: `.zsh_history`, `.bash_history`, `.bash_sessions/`, and
+  `.ipython/profile_default/history.sqlite` with WAL/SHM/journal sidecars.
 - `Library/Preferences/com.apple.LaunchServices.QuarantineEventsV2` — real
   SQLite (`LSQuarantineEvent` table + marker row) or text stand-in.
 - Safari: `History.db` with `-wal` / `-shm` sidecars, plists, cache file.

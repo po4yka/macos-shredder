@@ -107,6 +107,9 @@ build_user_home() { # build_user_home <home-dir>
   printf 'session 1 %s\n' "$MARK_HIST" > "$home/.bash_sessions/session_001.history"
   printf 'session 2 %s\n' "$MARK_HIST" > "$home/.bash_sessions/session_002.history"
   printf 'ipython history placeholder %s\n' "$MARK_HIST" > "$home/.ipython/profile_default/history.sqlite"
+  printf 'ipython wal %s\n' "$MARK_HIST" > "$home/.ipython/profile_default/history.sqlite-wal"
+  printf 'ipython shm %s\n' "$MARK_HIST" > "$home/.ipython/profile_default/history.sqlite-shm"
+  printf 'ipython journal %s\n' "$MARK_HIST" > "$home/.ipython/profile_default/history.sqlite-journal"
 
   # --- browser (Safari) ------------------------------------------------------
   local safari="$home/Library/Safari"
