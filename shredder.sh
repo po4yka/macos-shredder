@@ -1151,6 +1151,13 @@ module_unified() {
 # --- module: fileevents ------------------------------------------------------
 module_fileevents() {
     local u h uid qdb vol
+    # Restart lsd first so it releases quarantine database handles before the
+    # SQLite cleanup attempts to acquire a write lock.
+    if [ "$TEST_MODE" -eq 0 ] && [ "$DRY_RUN" -eq 0 ]; then
+        if command -v killall >/dev/null 2>&1; then
+            killall lsd >/dev/null 2>&1 || log_debug "killall lsd failed (best effort)"
+        fi
+    fi
     # Launch Services quarantine databases (system + per-user copies).
     qdb="$SYS_PREFS/com.apple.LaunchServices.QuarantineEventsV2"
     sqlite_purge "$qdb" "DELETE FROM LSQuarantineEvent;"
@@ -1161,12 +1168,6 @@ module_fileevents() {
         sqlite_purge "$qdb" "DELETE FROM LSQuarantineEvent;"
         sqlite_purge "$qdb" "VACUUM;"
     done < <(enumerate_users)
-    # Restart lsd so it releases its open handles on the quarantine stores.
-    if [ "$TEST_MODE" -eq 0 ] && [ "$DRY_RUN" -eq 0 ]; then
-        if command -v killall >/dev/null 2>&1; then
-            killall lsd >/dev/null 2>&1 || log_debug "killall lsd failed (best effort)"
-        fi
-    fi
     # FSEvents on the startup volume; SIP commonly blocks this and the
     # failure is counted honestly rather than hidden.
     if [ -d "$SANDBOX/.fseventsd" ]; then
