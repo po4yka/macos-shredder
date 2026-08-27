@@ -52,6 +52,8 @@ Per-user fixtures:
 - Safari: `History.db` with `-wal` / `-shm` sidecars, plists, cache file.
 - Chrome: `Default` and `Profile 1`; an intermediate Chromium profile symlink
   points outside the user home and must be refused.
+- Firefox: a custom-named profile proves cleanup does not depend on `default`
+  appearing in the profile directory name.
 - Per-user KnowledgeC and Shared File List recent-item stores. Non-recent
   favorites must survive.
 - Trash: `.Trash/file.txt` **and** `.Trash/.hidden-leak` (hidden file proves

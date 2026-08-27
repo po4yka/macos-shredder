@@ -1090,7 +1090,7 @@ clean_firefox_for_home() {
         log_warn "Firefox is running; skipping Firefox database deletion (data integrity)"
         skip_dbs=1
     fi
-    for prof in "$profiles"/*.default*/; do
+    for prof in "$profiles"/*/; do
         [ -d "$prof" ] || continue
         if [ "$skip_dbs" -eq 0 ]; then
             remove_path "$prof/places.sqlite"

@@ -132,6 +132,13 @@ build_user_home() { # build_user_home <home-dir>
     printf 'chrome cache %s\n' "$MARK_OWN" > "$chrome/$profile/Cache/cache.data"
   done
 
+  # Firefox profiles can have arbitrary names; they are not required to
+  # contain "default".
+  local firefox="$home/Library/Application Support/Firefox/Profiles/abcd1234.work"
+  mkdir -p "$firefox/cache2"
+  printf 'firefox history %s\n' "$MARK_HIST" > "$firefox/places.sqlite"
+  printf 'firefox cache %s\n' "$MARK_OWN" > "$firefox/cache2/cache.data"
+
   # --- launch services quarantine ---------------------------------------------
   make_quarantine_db "$home/Library/Preferences/com.apple.LaunchServices.QuarantineEventsV2"
 
