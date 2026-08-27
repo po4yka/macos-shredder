@@ -47,6 +47,14 @@ if (set -o pipefail 2>/dev/null); then
     set -o pipefail
 fi
 
+# Root runs must not resolve commands from a caller-controlled PATH. Sandbox
+# tests keep their injected PATH, but their mutations are confined below the
+# marked SHREDDER_ROOT.
+if [ -z "${SHREDDER_ROOT:-}" ]; then
+    PATH="/usr/bin:/bin:/usr/sbin:/sbin"
+    export PATH
+fi
+
 ###############################################################################
 # SECTION: Global configuration
 ###############################################################################

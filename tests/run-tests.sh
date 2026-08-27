@@ -13,6 +13,7 @@
 #   H  least privilege    user-home mutations -> owner UID command wrapper
 #   I  symlink refusal     adversarial fixture -> exact expected failures
 #   J  sandbox boundary    system-path symlink -> no sandbox escape
+#   K  trusted PATH        real mode ignores caller-provided commands
 #
 # Exit codes: 0 all phases passed; 1 one or more phases failed;
 #             77 shredder.sh not built yet.
@@ -64,6 +65,7 @@ RES_G='FAIL'
 RES_H='FAIL'
 RES_I='FAIL'
 RES_J='FAIL'
+RES_K='FAIL'
 
 phase_a_usage_validation() {
   local sb="$WORK/sandbox-a" log="$WORK/phase-a.log" rc=0 ok=1
@@ -264,6 +266,20 @@ phase_j_sandbox_boundary() {
     && grep -q 'network sentinel' "$outside/SystemConfiguration/com.apple.wifi.known-networks/network.plist"
 }
 
+phase_k_trusted_path() {
+  local bin="$WORK/phase-k-bin" calls="$WORK/phase-k-calls.log"
+  local log="$WORK/phase-k.log" rc=0
+  mkdir -p "$bin"
+  # shellcheck disable=SC2016 # variables expand when the generated stub runs
+  printf '#!/bin/sh\nprintf "%%s\\n" "$0" >> "$SHREDDER_PATH_CALL_LOG"\nexec /usr/bin/tr "$@"\n' > "$bin/tr"
+  chmod +x "$bin/tr"
+  info 'running: real mode must ignore caller-provided PATH commands'
+  PATH="$bin:$PATH" SHREDDER_PATH_CALL_LOG="$calls" \
+    /bin/bash "$SHREDDER" --modules bogus_definitely_invalid >"$log" 2>&1 || rc=$?
+  info "exit code: $rc (expected 64)"
+  [ "$rc" -eq 64 ] && [ ! -e "$calls" ]
+}
+
 preserve_failure_artifacts() {
   local dest="$REPO_ROOT/tests-last-run"
   mkdir -p "$dest"
@@ -311,6 +327,10 @@ info '=== PHASE J: sandbox boundary ==='
 if phase_j_sandbox_boundary; then RES_J='PASS'; fi
 info "PHASE J result: $RES_J"
 
+info '=== PHASE K: trusted PATH ==='
+if phase_k_trusted_path; then RES_K='PASS'; fi
+info "PHASE K result: $RES_K"
+
 info '================ SUMMARY ================'
 info "A usage-validation : $RES_A"
 info "B module-listing   : $RES_B"
@@ -322,9 +342,10 @@ info "G host-isolation  : $RES_G"
 info "H least-privilege : $RES_H"
 info "I symlink-refusal : $RES_I"
 info "J sandbox-boundary: $RES_J"
+info "K trusted-path    : $RES_K"
 
 overall=0
-for r in "$RES_A" "$RES_B" "$RES_C" "$RES_D" "$RES_E" "$RES_F" "$RES_G" "$RES_H" "$RES_I" "$RES_J"; do
+for r in "$RES_A" "$RES_B" "$RES_C" "$RES_D" "$RES_E" "$RES_F" "$RES_G" "$RES_H" "$RES_I" "$RES_J" "$RES_K"; do
   [ "$r" = 'PASS' ] || overall=1
 done
 if [ "$overall" -ne 0 ]; then
