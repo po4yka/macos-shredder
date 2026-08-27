@@ -1,0 +1,30 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  integration:
+    strategy:
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check shell syntax
+        run: bash -n shredder.sh tests/*.sh
+      - name: Run integration tests
+        run: ./tests/run-tests.sh
+      - name: Upload failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tests-last-run-${{ matrix.os }}
+          path: tests-last-run/
+          if-no-files-found: ignore

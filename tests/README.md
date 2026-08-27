@@ -9,20 +9,23 @@ Files:
 
 | Script                 | Role                                                        |
 | ---------------------- | ----------------------------------------------------------- |
-| `run-tests.sh`         | orchestrator — runs phases A–D, reports PASS/FAIL per phase |
+| `run-tests.sh`         | orchestrator — runs phases A–E, reports PASS/FAIL per phase |
 | `create-artifacts.sh`  | builds the deterministic sandbox fixture tree (+ manifest)  |
 | `verify-cleanup.sh`    | asserts post-cleaning state (`force`) or byte-stability (`dryrun`) |
 | `README.md`            | this document                                               |
 
 ## Sandbox architecture (the SHREDDER_ROOT contract)
 
-`shredder.sh` honours `SHREDDER_ROOT=<dir>`: **every** filesystem target is
-redirected under that prefix, root/Darwin checks are skipped, and no special
-macOS tooling is required. Tests exploit this to build a miniature macOS
+`shredder.sh` honours `SHREDDER_ROOT=<dir>` only when the absolute,
+non-symlink directory contains `.macos-shredder-test-root`. Every filesystem
+target is redirected under that prefix, root/Darwin checks are skipped, and no
+special macOS tooling is required. Tests use this to build a miniature macOS
 filesystem with two simulated users:
 
 - `Users/alice` and `Users/User Space` — full per-user fixtures. The space in
   `User Space` is deliberate bait for unquoted-enumeration bugs.
+- `Users/mallory` is a symlink to an escape sentinel and must never be
+  traversed by root cleanup.
 - `Users/Shared`, `Users/Guest`, `Users/.hiddenuser` — homes that enumerators
   must **skip**; their history files must survive cleaning untouched.
 
@@ -47,6 +50,10 @@ Per-user fixtures:
 - `Library/Preferences/com.apple.LaunchServices.QuarantineEventsV2` — real
   SQLite (`LSQuarantineEvent` table + marker row) or text stand-in.
 - Safari: `History.db` with `-wal` / `-shm` sidecars, plists, cache file.
+- Chrome: `Default` and `Profile 1`; an intermediate Chromium profile symlink
+  points outside the user home and must be refused.
+- Per-user KnowledgeC and Shared File List recent-item stores. Non-recent
+  favorites must survive.
 - Trash: `.Trash/file.txt` **and** `.Trash/.hidden-leak` (hidden file proves
   correct emptying).
 - Homebrew caches/logs; app traces (VS Code, JetBrains, saved states).
@@ -95,6 +102,8 @@ Exit codes: `run-tests.sh` → `0` all phases passed, `1` any phase failed,
   manifest must recompute byte-identical with an identical file set → proves
   there is **no unguarded destructive operation** behind the dry-run flag
   (the latent-bomb regression class).
+- **E — sandbox guard**: an unmarked `SHREDDER_ROOT` must fail before any
+  module runs. Fixture roots carry `.macos-shredder-test-root`.
 
 ## Requirements
 

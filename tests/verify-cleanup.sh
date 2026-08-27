@@ -215,9 +215,29 @@ check_user_artifacts_cleaned() { # check_user_artifacts_cleaned <label> <home>
   check_gone "$label: Safari History.db-wal sidecar gone" "$home/Library/Safari/History.db-wal"
   check_gone "$label: Safari History.db-shm sidecar gone" "$home/Library/Safari/History.db-shm"
 
+  # Chromium profiles: both Default and named profiles are covered.
+  if [ "$label" = 'user[User Space]' ]; then
+    check_gone "$label: Chrome Default history gone" \
+      "$home/Library/Application Support/Google/Chrome/Default/History"
+    check_gone "$label: Chrome named-profile history gone" \
+      "$home/Library/Application Support/Google/Chrome/Profile 1/History"
+    check_gone "$label: Chrome named-profile cache gone" \
+      "$home/Library/Application Support/Google/Chrome/Profile 1/Cache/cache.data"
+  fi
+
   # launch services quarantine markers
   check_quarantine_db "$label: quarantine marker rows gone" \
     "$home/Library/Preferences/com.apple.LaunchServices.QuarantineEventsV2"
+
+  check_knowledge_db "$label: per-user KnowledgeC markers absent" \
+    "$home/Library/Application Support/Knowledge/knowledgeC.db"
+
+  check_gone "$label: recent applications list gone" \
+    "$home/Library/Application Support/com.apple.sharedfilelist/com.apple.LSSharedFileList.RecentApplications.sfl3"
+  check_gone "$label: recent documents list gone" \
+    "$home/Library/Application Support/com.apple.sharedfilelist/com.apple.LSSharedFileList.RecentDocuments.sfl3"
+  check_exists_file "$label: favorite shared list preserved" \
+    "$home/Library/Application Support/com.apple.sharedfilelist/com.apple.LSSharedFileList.FavoriteItems.sfl3"
 
   # diagnostic reports
   check_gone "$label: DiagnosticReports crash report gone" "$home/Library/Logs/DiagnosticReports/crash-user.ips"
@@ -260,6 +280,10 @@ run_force_checks() { # run_force_checks <root>
   for sp in 'Shared' 'Guest' '.hiddenuser'; do
     check_history_survives "skipped home untouched: Users/$sp" "$root/Users/$sp/.zsh_history"
   done
+  check_history_survives 'linked home untouched: Users/mallory' \
+    "$root/escape-target/mallory-home/.zsh_history"
+  check_exists_file 'symlink escape target survives browser cleanup' \
+    "$root/escape-target/chromium-profile/History"
 
   # system logs
   check_marker_absent 'system.log: legacy NYXTEST marker scrubbed' "$root/var/log/system.log" 'NYXTEST'

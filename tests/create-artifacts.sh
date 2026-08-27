@@ -119,8 +119,29 @@ build_user_home() { # build_user_home <home-dir>
   printf '<plist><string>lastsession %s</string></plist>\n' "$MARK_HIST" > "$safari/LastSession.plist"
   printf 'safari cache blob %s\n' "$MARK_OWN" > "$home/Library/Caches/com.apple.Safari/cache-file"
 
+  # Chromium-family profiles: Default plus a named profile. The second
+  # profile catches implementations that only clean Default.
+  local chrome="$home/Library/Application Support/Google/Chrome"
+  local profile
+  for profile in Default 'Profile 1'; do
+    mkdir -p "$chrome/$profile/Cache"
+    printf 'chrome history %s\n' "$MARK_HIST" > "$chrome/$profile/History"
+    printf 'chrome cache %s\n' "$MARK_OWN" > "$chrome/$profile/Cache/cache.data"
+  done
+
   # --- launch services quarantine ---------------------------------------------
   make_quarantine_db "$home/Library/Preferences/com.apple.LaunchServices.QuarantineEventsV2"
+
+  # Current macOS stores KnowledgeC per user. Keep a fixture at the legacy
+  # system path too; both must be handled when present.
+  make_knowledge_db "$home/Library/Application Support/Knowledge/knowledgeC.db"
+
+  # Shared File List recent-item stores replaced the old recentitems plist.
+  local shared_lists="$home/Library/Application Support/com.apple.sharedfilelist"
+  mkdir -p "$shared_lists"
+  printf 'recent apps %s\n' "$MARK_OWN" > "$shared_lists/com.apple.LSSharedFileList.RecentApplications.sfl3"
+  printf 'recent docs %s\n' "$MARK_OWN" > "$shared_lists/com.apple.LSSharedFileList.RecentDocuments.sfl3"
+  printf 'favorite must survive\n' > "$shared_lists/com.apple.LSSharedFileList.FavoriteItems.sfl3"
 
   # --- trash (incl. hidden leak) ----------------------------------------------
   mkdir -p "$home/.Trash"
@@ -175,6 +196,7 @@ main() {
   mkdir -p "$root"
   root="$(cd "$root" && pwd)"
   SANDBOX_ROOT="$root"
+  : > "$root/.macos-shredder-test-root"
 
   if [ "$HAVE_SQLITE3" -eq 1 ]; then
     printf '[artifacts] sqlite3 detected: real database fixtures will be used\n'
@@ -194,6 +216,20 @@ main() {
       printf '.DS_Store blob %s (%s/%s home view)\n' "$MARK_OWN" "$uname" "$sub" > "$home/$sub/.DS_Store"
     done
   done
+
+  # A user-controlled intermediate symlink must never let the root cleaner
+  # escape the user's home. Chromium is intentionally absent from the normal
+  # fixtures so the test cannot depend on whether Chrome runs on the host.
+  mkdir -p "$root/escape-target/chromium-profile" \
+    "$root/Users/alice/Library/Application Support/Chromium"
+  printf 'must survive symlink escape test\n' > "$root/escape-target/chromium-profile/History"
+  ln -s "$root/escape-target/chromium-profile" \
+    "$root/Users/alice/Library/Application Support/Chromium/Default"
+
+  # A symlink masquerading as a home directory must not be enumerated.
+  mkdir -p "$root/escape-target/mallory-home"
+  printf 'must survive linked-home test\n' > "$root/escape-target/mallory-home/.zsh_history"
+  ln -s "$root/escape-target/mallory-home" "$root/Users/mallory"
 
   printf '[artifacts] building homes that enumerators must skip (Shared, Guest, .hiddenuser)\n'
   for special in 'Shared' 'Guest' '.hiddenuser'; do

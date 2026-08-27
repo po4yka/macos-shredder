@@ -24,8 +24,9 @@
 #   network reminders, package-manager caches and application leftovers.
 #
 # Testability (sandbox mode):
-#   Export SHREDDER_ROOT=/path/to/sandbox to root EVERY filesystem target
-#   under that directory. In that mode the root-privilege check, the
+#   Create .macos-shredder-test-root in a sandbox, then export
+#   SHREDDER_ROOT=/path/to/sandbox to root EVERY filesystem target there.
+#   In that mode the root-privilege check, the
 #   Darwin OS check and the Full Disk Access probe are skipped, and any
 #   missing system utility degrades gracefully into a debug note with an
 #   honest zero count instead of failing.
@@ -39,6 +40,7 @@
 
 SCRIPT_NAME="macos-shredder"
 VERSION="1.0.0"
+TEST_ROOT_MARKER=".macos-shredder-test-root"
 
 set -eu
 if (set -o pipefail 2>/dev/null); then
@@ -51,7 +53,6 @@ fi
 
 DRY_RUN=0
 DEBUG=0
-VERBOSE=0
 FORCE=0
 LIST_ONLY=0
 INCLUDE_VOLUMES=0
@@ -75,7 +76,6 @@ VAR_AUDIT=""
 VAR_DB_DIAG=""
 VAR_FOLDERS=""
 SYS_PREFS=""
-SPOTLIGHT_ROOT=""
 DATA_VOLUME=""
 KNOWLEDGE_DB=""
 
@@ -183,6 +183,7 @@ die() {
     exit 1
 }
 
+# shellcheck disable=SC2329 # invoked by trap in main()
 on_interrupt() {
     printf '%b\n' "${COLOR_YELLOW}[!]${COLOR_RESET} interrupted by user; exiting" >&2
     log_message "WARN" "interrupted by user"
@@ -197,6 +198,44 @@ on_interrupt() {
 # DEBUG=1, and they keep the global CLEANED_COUNT / FAILED_COUNT honest.
 ###############################################################################
 
+# Refuse mutations through symlink components inside user-controlled homes.
+# System paths such as /var are symlinks on macOS, so this check is scoped to
+# USERS_DIR where an unprivileged user can prepare a path before a root run.
+guard_user_target() {
+    local target="$1"
+    local relative user_home cursor parent
+    case "$target" in
+        "$USERS_DIR"/*) ;;
+        *) return 0 ;;
+    esac
+    relative="${target#"$USERS_DIR"/}"
+    user_home="$USERS_DIR/${relative%%/*}"
+    cursor="$target"
+    while :; do
+        if [ -L "$cursor" ]; then
+            if [ "$DRY_RUN" -eq 1 ]; then
+                log_debug "[DRY RUN] would refuse user path with symlink component: $target"
+            else
+                log_warn "refusing user path with symlink component: $target"
+                FAILED_COUNT=$((FAILED_COUNT + 1))
+            fi
+            return 1
+        fi
+        [ "$cursor" = "$user_home" ] && return 0
+        parent="${cursor%/*}"
+        if [ "$parent" = "$cursor" ]; then
+            if [ "$DRY_RUN" -eq 1 ]; then
+                log_debug "[DRY RUN] would refuse user path outside its home: $target"
+            else
+                log_warn "refusing user path outside its home: $target"
+                FAILED_COUNT=$((FAILED_COUNT + 1))
+            fi
+            return 1
+        fi
+        cursor="$parent"
+    done
+}
+
 # remove_path PATH - recursively delete a file/dir/symlink after an
 # existence check. Broken symlinks are handled via the -L test.
 remove_path() {
@@ -204,6 +243,7 @@ remove_path() {
     if [ -z "$target" ]; then
         return 0
     fi
+    guard_user_target "$target" || return 0
     if [ ! -e "$target" ] && [ ! -L "$target" ]; then
         log_debug "not present, skipping: $target"
         return 0
@@ -229,6 +269,7 @@ truncate_file() {
     if [ -z "$target" ]; then
         return 0
     fi
+    guard_user_target "$target" || return 0
     if [ ! -f "$target" ]; then
         log_debug "not a regular file, skipping: $target"
         return 0
@@ -256,8 +297,18 @@ truncate_file() {
 clear_dir_contents() {
     local dir="$1"
     local p count=0
-    if [ -z "$dir" ] || [ ! -d "$dir" ]; then
-        log_debug "directory not present, skipping: ${dir:-<empty>}"
+    if [ -z "$dir" ]; then
+        log_debug "directory not present, skipping: <empty>"
+        return 0
+    fi
+    guard_user_target "$dir" || return 0
+    if [ ! -d "$dir" ]; then
+        log_debug "directory not present, skipping: $dir"
+        return 0
+    fi
+    if [ ! -r "$dir" ] || [ ! -x "$dir" ]; then
+        log_warn "directory is not readable/searchable: $dir"
+        FAILED_COUNT=$((FAILED_COUNT + 1))
         return 0
     fi
     while IFS= read -r -d '' p; do
@@ -276,12 +327,18 @@ clear_dir_contents() {
 sqlite_purge() {
     local db="$1"
     local sql="$2"
-    if [ -z "$db" ] || [ ! -f "$db" ]; then
-        log_debug "database not present, skipping: ${db:-<empty>}"
+    if [ -z "$db" ]; then
+        log_debug "database not present, skipping: <empty>"
+        return 0
+    fi
+    guard_user_target "$db" || return 0
+    if [ ! -f "$db" ]; then
+        log_debug "database not present, skipping: $db"
         return 0
     fi
     if ! command -v sqlite3 >/dev/null 2>&1; then
-        log_debug "sqlite3 unavailable; skipping statement on: $db"
+        log_debug "sqlite3 unavailable; removing database instead: $db"
+        remove_path "$db"
         return 0
     fi
     if [ "$DRY_RUN" -eq 1 ]; then
@@ -310,20 +367,31 @@ resolve_paths() {
     VAR_DB_DIAG="$SANDBOX/var/db/diagnostics"
     VAR_FOLDERS="$SANDBOX/private/var/folders"
     SYS_PREFS="$SANDBOX/Library/Preferences"
-    SPOTLIGHT_ROOT="$SANDBOX/.Spotlight-V100"
     DATA_VOLUME="$SANDBOX/System/Volumes/Data"
     KNOWLEDGE_DB="$SANDBOX/private/var/db/CoreDuet/Knowledge/knowledgeC.db"
 }
 
 detect_environment() {
     SANDBOX="${SHREDDER_ROOT:-}"
-    resolve_paths
     if [ -n "$SANDBOX" ]; then
+        case "$SANDBOX" in
+            /*) ;;
+            *) die "SHREDDER_ROOT must be an absolute path" ;;
+        esac
+        if [ ! -d "$SANDBOX" ] || [ -L "$SANDBOX" ]; then
+            die "SHREDDER_ROOT must be an existing, non-symlink directory"
+        fi
+        SANDBOX="$(cd "$SANDBOX" && pwd -P)"
+        case "$SANDBOX" in
+            /|/System|/Library|/Users|/private|/var)
+                die "unsafe SHREDDER_ROOT refused: $SANDBOX"
+                ;;
+        esac
+        if [ ! -f "$SANDBOX/$TEST_ROOT_MARKER" ]; then
+            die "SHREDDER_ROOT is missing required marker: $TEST_ROOT_MARKER"
+        fi
         TEST_MODE=1
         log_debug "test mode active: SHREDDER_ROOT='$SANDBOX'"
-        if [ ! -d "$SANDBOX" ]; then
-            log_warn "SHREDDER_ROOT does not exist yet: $SANDBOX"
-        fi
         log_debug "test mode: privilege, OS and Full Disk Access checks disabled"
     else
         TEST_MODE=0
@@ -334,6 +402,7 @@ detect_environment() {
         fi
         log_debug "real mode: Darwin detected; paths rooted at /"
     fi
+    resolve_paths
 }
 
 ###############################################################################
@@ -350,14 +419,19 @@ detect_environment() {
 emit_dir_users() {
     local d base
     for d in "$USERS_DIR"/*/; do
+        d="${d%/}"
         [ -d "$d" ] || continue
+        if [ -L "$d" ]; then
+            log_warn "skipping symlinked user home: $d"
+            continue
+        fi
         base="${d%/}"
         base="${base##*/}"
         case "$base" in
             Shared|Guest) continue ;;
             .*) continue ;;
         esac
-        printf '%s\t%s\t%s\n' "$base" "${d%/}" ""
+        printf '%s\t%s\t%s\n' "$base" "$d" ""
     done
 }
 
@@ -367,16 +441,18 @@ enumerate_users() {
         return 0
     fi
     if command -v dscl >/dev/null 2>&1; then
-        local emitted=0 u h uid
-        # NOTE: awk field-splitting truncates home paths containing spaces;
-        # this pipeline shape is mandated because dscl cannot emit NULs.
-        while IFS=$'\t' read -r u h; do
-            [ -n "$u" ] && [ -n "$h" ] || continue
-            uid="$(dscl . -read "/Users/$u" UniqueID 2>/dev/null | awk 'NR==1 {print $2; exit}' || true)"
+        local emitted=0 u h uid record
+        while IFS= read -r u; do
+            [ -n "$u" ] || continue
+            case "$u" in _*) continue ;; esac
+            record="$(dscl . -read "/Users/$u" NFSHomeDirectory UniqueID 2>/dev/null || true)"
+            h="$(printf '%s\n' "$record" | sed -n 's/^NFSHomeDirectory: //p' | head -n 1)"
+            uid="$(printf '%s\n' "$record" | sed -n 's/^UniqueID: //p' | head -n 1)"
+            case "$h" in /Users/*) ;; *) continue ;; esac
+            [ -d "$h" ] && [ ! -L "$h" ] || continue
             printf '%s\t%s\t%s\n' "$u" "$h" "$uid"
             emitted=1
-        done < <(dscl . -list /Users NFSHomeDirectory 2>/dev/null \
-                 | awk '$2 ~ /^\/Users\// && $1 !~ /^_/ {print $1 "\t" $2}')
+        done < <(dscl . -list /Users 2>/dev/null)
         if [ "$emitted" -eq 1 ]; then
             return 0
         fi
@@ -387,31 +463,36 @@ enumerate_users() {
     emit_dir_users
 }
 
-# run_as_user UID HOME CMD... - run a per-user command in the REAL user's
+# run_as_user USER UID HOME CMD... - run a per-user command in the REAL user's
 # context (fixes sudo-context bugs where defaults/qlmanage acted on root).
 run_as_user() {
-    local uid="$1"
-    local home="$2"
-    shift 2
+    local user="$1"
+    local uid="$2"
+    local home="$3"
+    shift 3
     [ $# -gt 0 ] || return 0
     if [ "$TEST_MODE" -eq 1 ]; then
         HOME="$home" "$@"
         return $?
     fi
-    local user="${home##*/}"
-    if command -v launchctl >/dev/null 2>&1; then
+    if [ -n "$uid" ] && command -v launchctl >/dev/null 2>&1; then
         if launchctl asuser "$uid" sudo -u "$user" env HOME="$home" "$@" >/dev/null 2>&1; then
             return 0
         fi
         return 1
     fi
-    log_debug "launchctl unavailable; cannot run command as user '$user'"
+    if command -v sudo >/dev/null 2>&1; then
+        sudo -u "$user" env HOME="$home" "$@" >/dev/null 2>&1
+        return $?
+    fi
+    log_debug "cannot run command as user '$user': launchctl/sudo unavailable"
     return 1
 }
 
 # browser_running PROC - true when the given browser process is running.
 browser_running() {
     local proc="$1"
+    [ "$TEST_MODE" -eq 0 ] || return 1
     command -v pgrep >/dev/null 2>&1 || return 1
     pgrep -x "$proc" >/dev/null 2>&1
 }
@@ -441,8 +522,8 @@ Options:
 
 Environment:
   SHREDDER_ROOT         When set, every filesystem target is rooted under this
-                        directory (sandbox/test mode); privilege, OS and Full
-                        Disk Access checks are skipped in that case.
+                        marked test directory. Privilege, OS and Full Disk
+                        Access checks are skipped in sandbox mode.
 
 Exit codes:
   0 success   1 fatal error   2 failed operations   64 usage error   130 interrupted
@@ -517,7 +598,6 @@ parse_args() {
                 ;;
             -d|--debug)
                 DEBUG=1
-                VERBOSE=1
                 shift
                 ;;
             -l|--list)
@@ -611,6 +691,7 @@ probe_full_disk_access() {
     while IFS=$'\t' read -r u h uid; do
         safari_dir="$h/Library/Safari"
         [ -d "$safari_dir" ] || continue
+        guard_user_target "$safari_dir" || return 1
         log_debug "probing Full Disk Access via: $safari_dir"
         if ! stat "$safari_dir" >/dev/null 2>&1; then
             return 1
@@ -797,23 +878,33 @@ module_systemlogs() {
 
 # --- module: audit -----------------------------------------------------------
 module_audit() {
+    local audit_enabled=0
     [ -d "$VAR_AUDIT" ] || {
         log_debug "audit directory not present, skipping: $VAR_AUDIT"
         return 0
     }
+    if [ ! -r "$VAR_AUDIT" ] || [ ! -x "$VAR_AUDIT" ]; then
+        log_warn "audit directory is not readable/searchable: $VAR_AUDIT"
+        if [ "$DRY_RUN" -eq 0 ]; then
+            FAILED_COUNT=$((FAILED_COUNT + 1))
+        fi
+        return 0
+    fi
     if [ "$DRY_RUN" -eq 1 ]; then
         local n
-        n="$(find "$VAR_AUDIT" -maxdepth 1 \( -type f -o -type l \) -name '[0-9]*' 2>/dev/null | wc -l | tr -d ' ')"
+        n="$(find "$VAR_AUDIT" -maxdepth 1 \( -type f -o -type l \) -name '[0-9]*' 2>/dev/null \
+            | wc -l | tr -d ' ' || true)"
         [ -n "$n" ] || n=0
         log_debug "[DRY RUN] would remove $n timestamped audit files under $VAR_AUDIT (preserving 'current')"
         CLEANED_COUNT=$((CLEANED_COUNT + n))
         return 0
     fi
-    if command -v audit >/dev/null 2>&1; then
+    if [ "$TEST_MODE" -eq 0 ] && command -v audit >/dev/null 2>&1 && audit -c >/dev/null 2>&1; then
+        audit_enabled=1
         log_debug "closing current audit record (audit -t)"
         audit -t >/dev/null 2>&1 || log_debug "audit -t returned non-zero (continuing)"
     else
-        log_debug "audit(8) unavailable; deleting existing trail files only"
+        log_debug "BSM audit is unavailable or disabled; deleting existing trail files only"
     fi
     # Delete timestamped trail files by basename pattern; never touch the
     # 'current' symlink.
@@ -823,7 +914,7 @@ module_audit() {
         [ "$b" = "current" ] && continue
         remove_path "$f"
     done < <(find "$VAR_AUDIT" -maxdepth 1 -name '[0-9]*' -print0 2>/dev/null)
-    if command -v audit >/dev/null 2>&1; then
+    if [ "$audit_enabled" -eq 1 ]; then
         audit -s >/dev/null 2>&1 || log_debug "audit -s failed (best effort)"
     fi
     return 0
@@ -871,7 +962,7 @@ clean_chrome_profile_caches() {
 
 clean_chrome_family_for_home() {
     local h="$1"
-    local label proc rel appdir
+    local label proc rel appdir prof
     while IFS='|' read -r label proc rel; do
         [ -n "$label" ] || continue
         appdir="$h/$rel"
@@ -879,10 +970,18 @@ clean_chrome_family_for_home() {
         if browser_running "$proc"; then
             log_warn "$label is running; skipping $label database deletion (data integrity)"
         else
-            clean_chrome_profile_dbs "$appdir/Default"
+            for prof in "$appdir/Default" "$appdir"/Profile\ */; do
+                prof="${prof%/}"
+                [ -d "$prof" ] || continue
+                clean_chrome_profile_dbs "$prof"
+            done
         fi
         # Pure cache directories are safe even while the browser runs.
-        clean_chrome_profile_caches "$appdir/Default"
+        for prof in "$appdir/Default" "$appdir"/Profile\ */; do
+            prof="${prof%/}"
+            [ -d "$prof" ] || continue
+            clean_chrome_profile_caches "$prof"
+        done
     done <<'CHROME_BROWSERS'
 Google Chrome|Google Chrome|Library/Application Support/Google/Chrome
 Chromium|Chromium|Library/Application Support/Chromium
@@ -934,7 +1033,8 @@ module_browser() {
 # --- module: unified ---------------------------------------------------------
 module_unified() {
     if [ "$TEST_MODE" -eq 1 ]; then
-        log_debug "test mode: unified log store at $VAR_DB_DIAG untouched; log(1) absent"
+        log_debug "test mode: clearing sandbox unified log store at $VAR_DB_DIAG"
+        clear_dir_contents "$VAR_DB_DIAG"
         return 0
     fi
     if [ "$DRY_RUN" -eq 1 ]; then
@@ -995,6 +1095,31 @@ module_fileevents() {
 }
 
 # --- module: usage -----------------------------------------------------------
+purge_knowledge_db() {
+    local db="$1"
+    local tbl tables
+    guard_user_target "$db" || return 0
+    [ -f "$db" ] || return 0
+    if ! command -v sqlite3 >/dev/null 2>&1; then
+        log_debug "sqlite3 unavailable; removing KnowledgeC database instead: $db"
+        remove_path "$db"
+        return 0
+    fi
+    if [ "$DRY_RUN" -eq 1 ]; then
+        log_debug "[DRY RUN] would purge knowledge tables and VACUUM: $db"
+        CLEANED_COUNT=$((CLEANED_COUNT + 1))
+        return 0
+    fi
+    tables="$(sqlite3 "$db" \
+        "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('ZOBJECT','ZSTRUCTUREDMETADATA');" \
+        2>/dev/null || true)"
+    while IFS= read -r tbl; do
+        [ -n "$tbl" ] || continue
+        sqlite_purge "$db" "DELETE FROM $tbl;"
+    done <<< "$tables"
+    sqlite_purge "$db" "VACUUM;"
+}
+
 clean_recent_items_for_user() {
     local u="$1"
     local h="$2"
@@ -1012,7 +1137,7 @@ clean_recent_items_for_user() {
     fi
     ri_ok=0
     for key in RecentDocuments RecentApplications RecentServers; do
-        if run_as_user "$uid" "$h" defaults delete com.apple.recentitems "$key" >/dev/null 2>&1; then
+        if run_as_user "$u" "$uid" "$h" defaults delete com.apple.recentitems "$key" >/dev/null 2>&1; then
             ri_ok=1
         fi
     done
@@ -1027,27 +1152,10 @@ clean_recent_items_for_user() {
 }
 
 module_usage() {
-    local u h uid tbl tables nc
-    # KnowledgeC usage database: purge only tables that actually exist.
-    if [ -f "$KNOWLEDGE_DB" ]; then
-        if command -v sqlite3 >/dev/null 2>&1; then
-            if [ "$DRY_RUN" -eq 1 ]; then
-                log_debug "[DRY RUN] would purge knowledge tables and VACUUM: $KNOWLEDGE_DB"
-                CLEANED_COUNT=$((CLEANED_COUNT + 1))
-            else
-                tables="$(sqlite3 "$KNOWLEDGE_DB" \
-                    "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('ZOBJECT','ZSTRUCTUREDMETADATA');" \
-                    2>/dev/null || true)"
-                while IFS= read -r tbl; do
-                    [ -n "$tbl" ] || continue
-                    sqlite_purge "$KNOWLEDGE_DB" "DELETE FROM $tbl;"
-                done <<< "$tables"
-                sqlite_purge "$KNOWLEDGE_DB" "VACUUM;"
-            fi
-        else
-            log_debug "sqlite3 unavailable; skipping knowledgeC.db purge"
-        fi
-    fi
+    local u h uid nc recent_dir recent_file
+    # Keep the legacy system store for older macOS releases, then handle the
+    # current per-user Knowledge store.
+    purge_knowledge_db "$KNOWLEDGE_DB"
     # Notification Center databases under /private/var/folders.
     while IFS= read -r -d '' nc; do
         if [ -d "$nc/db2" ]; then
@@ -1057,7 +1165,14 @@ module_usage() {
     # Recent items, executed in each user's own context.
     while IFS=$'\t' read -r u h uid; do
         [ -d "$h" ] || continue
+        purge_knowledge_db "$h/Library/Application Support/Knowledge/knowledgeC.db"
         clean_recent_items_for_user "$u" "$h" "$uid"
+        recent_dir="$h/Library/Application Support/com.apple.sharedfilelist"
+        if [ -d "$recent_dir" ]; then
+            while IFS= read -r -d '' recent_file; do
+                remove_path "$recent_file"
+            done < <(find "$recent_dir" -maxdepth 1 -type f -name '*Recent*.sfl*' -print0 2>/dev/null)
+        fi
     done < <(enumerate_users)
     return 0
 }
@@ -1065,19 +1180,15 @@ module_usage() {
 # --- module: spotlight -------------------------------------------------------
 module_spotlight() {
     if [ "$TEST_MODE" -eq 1 ]; then
-        log_debug "test mode: mdutil Spotlight index erase skipped"
+        log_debug "test mode: Spotlight erase-and-rebuild skipped"
     elif [ "$DRY_RUN" -eq 1 ]; then
-        log_debug "[DRY RUN] would erase the Spotlight index (mdutil -E)"
+        log_debug "[DRY RUN] would erase and rebuild the Spotlight index (mdutil -E)"
     elif command -v mdutil >/dev/null 2>&1; then
         if ! mdutil -E /System/Volumes/Data >/dev/null 2>&1; then
             mdutil -E / >/dev/null 2>&1 || log_warn "mdutil -E failed for both the data volume and /"
         fi
     else
         log_debug "mdutil unavailable; skipping Spotlight index erase"
-    fi
-    if [ -d "$SPOTLIGHT_ROOT" ]; then
-        log_debug "attempting Spotlight index directory cleanup (may be blocked by SIP)"
-        clear_dir_contents "$SPOTLIGHT_ROOT"
     fi
     return 0
 }
@@ -1092,7 +1203,7 @@ module_quicklook() {
             CLEANED_COUNT=$((CLEANED_COUNT + 1))
         elif ! command -v qlmanage >/dev/null 2>&1; then
             log_debug "qlmanage unavailable; skipping Quick Look reset for user '$u'"
-        elif run_as_user "$uid" "$h" qlmanage -r cache >/dev/null 2>&1; then
+        elif run_as_user "$u" "$uid" "$h" qlmanage -r cache >/dev/null 2>&1; then
             log_debug "reset Quick Look cache for user '$u'"
             CLEANED_COUNT=$((CLEANED_COUNT + 1))
         else
@@ -1121,28 +1232,29 @@ module_trash() {
 }
 
 # --- module: dsstore ---------------------------------------------------------
-module_dsstore() {
-    local base="$DATA_VOLUME"
-    local f vol
-    if [ ! -d "$base" ]; then
-        if [ "$TEST_MODE" -eq 1 ]; then
-            log_debug "test mode: $DATA_VOLUME missing; nothing to scan"
-            return 0
-        fi
-        base="/"
-    fi
-    # Pruned walk: never descend into /Volumes, Spotlight stores or Trash
-    # directories (those are separate concerns and would explode the scan).
+clean_dsstore_tree() {
+    local base="$1"
+    local f
+    [ -d "$base" ] || return 0
     while IFS= read -r -d '' f; do
         remove_path "$f"
-    done < <(find "$base" \( -path "*/Volumes" -o -name ".Spotlight-V100" -o -name ".Trashes" \) -prune \
+    done < <(find "$base" \( -name ".Spotlight-V100" -o -name ".Trashes" -o -name ".Trash" \) -prune \
              -o -type f -name ".DS_Store" -print0 2>/dev/null)
+}
+
+module_dsstore() {
+    local vol
+    # User homes are the useful default scope. Avoid the previous full-root
+    # walk; mounted volumes stay opt-in.
+    clean_dsstore_tree "$USERS_DIR"
+    if [ "$TEST_MODE" -eq 1 ]; then
+        # The sandbox models the APFS Data view as a separate tree.
+        clean_dsstore_tree "$DATA_VOLUME/Users"
+    fi
     if [ "$INCLUDE_VOLUMES" -eq 1 ]; then
         for vol in "$SANDBOX"/Volumes/*/; do
             [ -d "$vol" ] || continue
-            while IFS= read -r -d '' f; do
-                remove_path "$f"
-            done < <(find "$vol" -type f -name ".DS_Store" -print0 2>/dev/null)
+            clean_dsstore_tree "$vol"
         done
     fi
     return 0
@@ -1153,7 +1265,7 @@ module_wifi() {
     local f
     remove_path "$SYS_PREFS/SystemConfiguration/com.apple.airport.preferences.plist"
     remove_path "$SYS_PREFS/SystemConfiguration/com.apple.wifi.message-tracer.plist"
-    clear_dir_contents "$SYS_PREFS/com.apple.wifi.known-networks"
+    clear_dir_contents "$SYS_PREFS/SystemConfiguration/com.apple.wifi.known-networks"
     while IFS= read -r -d '' f; do
         truncate_file "$f"
     done < <(find "$VAR_LOG" -maxdepth 1 -type f -name 'wifi.log*' -print0 2>/dev/null)
@@ -1261,15 +1373,15 @@ print_warning_banner() {
 }
 
 print_summary() {
-    local cleaned_label="items cleaned"
-    if [ "$DRY_RUN" -eq 1 ]; then
-        cleaned_label="items WOULD BE cleaned (dry-run)"
-    fi
     printf '%b\n' "${COLOR_CYAN}==================================================================${COLOR_RESET}"
     printf '%b\n' "  ${SCRIPT_NAME} v${VERSION} - summary"
     printf '%b\n' "${COLOR_CYAN}==================================================================${COLOR_RESET}"
-    printf '  Total %-38s: %s\n' "$cleaned_label" "$CLEANED_COUNT"
-    printf '  Failed operations                          : %s\n' "$FAILED_COUNT"
+    if [ "$DRY_RUN" -eq 1 ]; then
+        printf '  Total items that would be cleaned: %s\n' "$CLEANED_COUNT"
+    else
+        printf '  Total items cleaned: %s\n' "$CLEANED_COUNT"
+    fi
+    printf '  Failed operations: %s\n' "$FAILED_COUNT"
     printf '%b\n' "${COLOR_CYAN}==================================================================${COLOR_RESET}"
 }
 
