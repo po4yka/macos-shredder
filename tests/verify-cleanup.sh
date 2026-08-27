@@ -264,10 +264,12 @@ check_user_artifacts_cleaned() { # check_user_artifacts_cleaned <label> <home>
 }
 
 check_audit() { # check_audit <root>
-  local root="$1" leftovers
+  local root="$1" leftovers current_target
+  current_target=$(readlink "$root/var/audit/current" 2>/dev/null) || current_target=''
+  current_target="${current_target##*/}"
   leftovers=0
   if [ -d "$root/var/audit" ]; then
-    leftovers=$(find "$root/var/audit" -type f -name '2*' -print | wc -l)
+    leftovers=$(find "$root/var/audit" -type f -name '2*' ! -name "$current_target" -print | wc -l)
     leftovers=$((leftovers))
   fi
   if [ "$leftovers" -eq 0 ]; then
@@ -276,6 +278,8 @@ check_audit() { # check_audit <root>
     fail 'audit: timestamped rotation files gone' '0 remaining' "$leftovers remaining in var/audit"
   fi
   check_exists_file 'audit: var/audit/current preserved' "$root/var/audit/current"
+  check_marker_absent 'audit: active record is not an old rotation' \
+    "$root/var/audit/current" 'audit rotation'
 }
 
 run_force_checks() { # run_force_checks <root>

@@ -256,7 +256,9 @@ main() {
   printf 'audit rotation 2023 tail\n' > "$root/var/audit/2023.12.31.235959+0000"
   printf 'audit rotation 2024 new year\n' > "$root/var/audit/2024.01.01.120000+0000"
   printf 'audit rotation 2024 mid year\n' > "$root/var/audit/2024.06.15.083000+0000"
-  printf 'live audit stream — this entry must be preserved\n' > "$root/var/audit/current"
+  printf 'live audit stream — this entry must be preserved\n' > "$root/var/audit/2026.08.27.070000.not_terminated"
+  rm -f "$root/var/audit/current"
+  ln -s '2026.08.27.070000.not_terminated' "$root/var/audit/current"
 
   printf '[artifacts] building unified logging store\n'
   for tier in Persist Special HighVolume; do

@@ -956,7 +956,7 @@ module_systemlogs() {
 
 # --- module: audit -----------------------------------------------------------
 module_audit() {
-    local audit_enabled=0
+    local audit_enabled=0 current_target=""
     [ -d "$VAR_AUDIT" ] || {
         log_debug "audit directory not present, skipping: $VAR_AUDIT"
         return 0
@@ -969,32 +969,44 @@ module_audit() {
         return 0
     fi
     if [ "$DRY_RUN" -eq 1 ]; then
-        local n
-        n="$(find "$VAR_AUDIT" -maxdepth 1 \( -type f -o -type l \) -name '[0-9]*' 2>/dev/null \
-            | wc -l | tr -d ' ' || true)"
-        [ -n "$n" ] || n=0
+        local n=0 dry_file dry_base
+        current_target="$(readlink "$VAR_AUDIT/current" 2>/dev/null || true)"
+        current_target="${current_target##*/}"
+        while IFS= read -r -d '' dry_file; do
+            dry_base="${dry_file##*/}"
+            [ -n "$current_target" ] && [ "$dry_base" = "$current_target" ] && continue
+            n=$((n + 1))
+        done < <(find "$VAR_AUDIT" -maxdepth 1 \( -type f -o -type l \) -name '[0-9]*' -print0 2>/dev/null)
         log_debug "[DRY RUN] would remove $n timestamped audit files under $VAR_AUDIT (preserving 'current')"
         CLEANED_COUNT=$((CLEANED_COUNT + n))
         return 0
     fi
     if [ "$TEST_MODE" -eq 0 ] && command -v audit >/dev/null 2>&1 && audit -c >/dev/null 2>&1; then
         audit_enabled=1
-        log_debug "closing current audit record (audit -t)"
-        audit -t >/dev/null 2>&1 || log_debug "audit -t returned non-zero (continuing)"
+        log_debug "rotating current audit record (audit -n)"
+        if ! audit -n >/dev/null 2>&1; then
+            log_warn "failed to rotate the active audit record"
+            FAILED_COUNT=$((FAILED_COUNT + 1))
+            return 0
+        fi
     else
         log_debug "BSM audit is unavailable or disabled; deleting existing trail files only"
     fi
+    current_target="$(readlink "$VAR_AUDIT/current" 2>/dev/null || true)"
+    current_target="${current_target##*/}"
+    if [ "$audit_enabled" -eq 1 ] && [ -z "$current_target" ]; then
+        log_warn "cannot identify the active audit record; refusing trail deletion"
+        FAILED_COUNT=$((FAILED_COUNT + 1))
+        return 0
+    fi
     # Delete timestamped trail files by basename pattern; never touch the
-    # 'current' symlink.
+    # file referenced by the 'current' symlink.
     local f b
     while IFS= read -r -d '' f; do
         b="${f##*/}"
-        [ "$b" = "current" ] && continue
+        [ -n "$current_target" ] && [ "$b" = "$current_target" ] && continue
         remove_path "$f"
-    done < <(find "$VAR_AUDIT" -maxdepth 1 -name '[0-9]*' -print0 2>/dev/null)
-    if [ "$audit_enabled" -eq 1 ]; then
-        audit -s >/dev/null 2>&1 || log_debug "audit -s failed (best effort)"
-    fi
+    done < <(find "$VAR_AUDIT" -maxdepth 1 \( -type f -o -type l \) -name '[0-9]*' -print0 2>/dev/null)
     return 0
 }
 

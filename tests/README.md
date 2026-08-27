@@ -34,8 +34,8 @@ System-level fixtures:
 - `var/log/system.log` containing the legacy `NYXTEST` marker plus the current
   `SHRED-TEST` marker; `var/log/wifi.log`; `Library/Logs/DiagnosticReports/`
   (system-level `crash-1.ips` and one per user).
-- `var/audit/2023…` / `2024…` rotation files plus `var/audit/current`, which
-  must be preserved.
+- `var/audit/2023…` / `2024…` rotation files plus a live record referenced by
+  `var/audit/current`; the live record and symlink must be preserved.
 - `var/db/diagnostics/{Persist,Special,HighVolume}/` — unified log store.
 - `private/var/folders/xx/yy/C/com.apple.notificationcenter/db2/db.db` and
   `…/com.apple.QuickLook.thumbnailcache/thumb.jpg`.
