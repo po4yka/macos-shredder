@@ -1405,11 +1405,12 @@ main() {
     if [ "$TEST_MODE" -eq 0 ]; then
         if ! probe_full_disk_access; then
             warn_fda_missing
-            if [ "$FORCE" -eq 0 ] && [ "$DRY_RUN" -eq 0 ]; then
-                if ! confirm_action "Continue anyway? [y/N]: "; then
-                    die "aborted by user"
-                fi
-            fi
+        fi
+    fi
+
+    if [ "$FORCE" -eq 0 ] && [ "$DRY_RUN" -eq 0 ]; then
+        if ! confirm_action "Proceed with irreversible cleanup? [y/N]: "; then
+            die "aborted by user"
         fi
     fi
 

@@ -9,7 +9,7 @@ Files:
 
 | Script                 | Role                                                        |
 | ---------------------- | ----------------------------------------------------------- |
-| `run-tests.sh`         | orchestrator — runs phases A–E, reports PASS/FAIL per phase |
+| `run-tests.sh`         | orchestrator — runs phases A–F, reports PASS/FAIL per phase |
 | `create-artifacts.sh`  | builds the deterministic sandbox fixture tree (+ manifest)  |
 | `verify-cleanup.sh`    | asserts post-cleaning state (`force`) or byte-stability (`dryrun`) |
 | `README.md`            | this document                                               |
@@ -104,6 +104,8 @@ Exit codes: `run-tests.sh` → `0` all phases passed, `1` any phase failed,
   (the latent-bomb regression class).
 - **E — sandbox guard**: an unmarked `SHREDDER_ROOT` must fail before any
   module runs. Fixture roots carry `.macos-shredder-test-root`.
+- **F — confirmation guard**: a non-interactive destructive run without
+  `--force` must abort without changing the fixture.
 
 ## Requirements
 

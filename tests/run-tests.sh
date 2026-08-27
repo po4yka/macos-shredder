@@ -8,6 +8,7 @@
 #   C  forced clean       artifacts -> --force --debug -> post-state verified
 #   D  dry-run safety     artifacts+manifest -> -n -f -> byte-identical state
 #   E  sandbox guard      unmarked SHREDDER_ROOT -> fatal refusal
+#   F  confirmation       non-interactive real run -> refusal + unchanged data
 #
 # Exit codes: 0 all phases passed; 1 one or more phases failed;
 #             77 shredder.sh not built yet.
@@ -54,6 +55,7 @@ RES_B='FAIL'
 RES_C='FAIL'
 RES_D='FAIL'
 RES_E='FAIL'
+RES_F='FAIL'
 
 phase_a_usage_validation() {
   local sb="$WORK/sandbox-a" log="$WORK/phase-a.log" rc=0 ok=1
@@ -165,6 +167,17 @@ phase_e_sandbox_guard() {
   [ "$rc" -eq 1 ] && grep -q '.macos-shredder-test-root' "$log"
 }
 
+phase_f_confirmation_guard() {
+  local sb="$WORK/sandbox-f" log="$WORK/phase-f.log" rc=0
+  bash "$CREATE_ARTIFACTS" "$sb" >"$WORK/phase-f-create.log"
+  info 'running: non-interactive cleanup without --force must be rejected'
+  SHREDDER_ROOT="$sb" bash "$SHREDDER" --modules shell </dev/null >"$log" 2>&1 || rc=$?
+  info "exit code: $rc (expected 1)"
+  [ "$rc" -eq 1 ] \
+    && grep -q 'aborted by user' "$log" \
+    && grep -q 'SHREDTEST-HIST' "$sb/Users/alice/.zsh_history"
+}
+
 preserve_failure_artifacts() {
   local dest="$REPO_ROOT/tests-last-run"
   mkdir -p "$dest"
@@ -192,15 +205,20 @@ info '=== PHASE E: sandbox guard ==='
 if phase_e_sandbox_guard; then RES_E='PASS'; fi
 info "PHASE E result: $RES_E"
 
+info '=== PHASE F: confirmation guard ==='
+if phase_f_confirmation_guard; then RES_F='PASS'; fi
+info "PHASE F result: $RES_F"
+
 info '================ SUMMARY ================'
 info "A usage-validation : $RES_A"
 info "B module-listing   : $RES_B"
 info "C force-clean      : $RES_C"
 info "D dry-run-safety   : $RES_D"
 info "E sandbox-guard   : $RES_E"
+info "F confirmation    : $RES_F"
 
 overall=0
-for r in "$RES_A" "$RES_B" "$RES_C" "$RES_D" "$RES_E"; do
+for r in "$RES_A" "$RES_B" "$RES_C" "$RES_D" "$RES_E" "$RES_F"; do
   [ "$r" = 'PASS' ] || overall=1
 done
 if [ "$overall" -ne 0 ]; then
