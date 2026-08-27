@@ -15,6 +15,7 @@
 #   J  sandbox boundary    system-path symlink -> no sandbox escape
 #   K  trusted PATH        real mode ignores caller-provided commands
 #   L  SQLite discovery    KnowledgeC inspection errors fail closed
+#   M  Spotlight result    native dry-run reports its requested operation
 #
 # Exit codes: 0 all phases passed; 1 one or more phases failed;
 #             77 shredder.sh not built yet.
@@ -68,6 +69,7 @@ RES_I='FAIL'
 RES_J='FAIL'
 RES_K='FAIL'
 RES_L='FAIL'
+RES_M='FAIL'
 
 phase_a_usage_validation() {
   local sb="$WORK/sandbox-a" log="$WORK/phase-a.log" rc=0 ok=1
@@ -312,6 +314,18 @@ phase_l_sqlite_discovery() {
   [ "$rc" -eq 2 ] && grep -q 'Failed operations: 3' "$log"
 }
 
+phase_m_spotlight_result() {
+  local log="$WORK/phase-m.log" rc=0
+  if [ "$(uname -s)" != 'Darwin' ]; then
+    info 'Spotlight result check skipped on non-Darwin host'
+    return 0
+  fi
+  info 'running: native Spotlight dry-run must count its requested operation'
+  /bin/bash "$SHREDDER" --dry-run --force --modules spotlight >"$log" 2>&1 || rc=$?
+  info "exit code: $rc (expected 0)"
+  [ "$rc" -eq 0 ] && grep -q 'Total items that would be cleaned: 1' "$log"
+}
+
 preserve_failure_artifacts() {
   local dest="$REPO_ROOT/tests-last-run"
   mkdir -p "$dest"
@@ -367,6 +381,10 @@ info '=== PHASE L: SQLite discovery ==='
 if phase_l_sqlite_discovery; then RES_L='PASS'; fi
 info "PHASE L result: $RES_L"
 
+info '=== PHASE M: Spotlight result ==='
+if phase_m_spotlight_result; then RES_M='PASS'; fi
+info "PHASE M result: $RES_M"
+
 info '================ SUMMARY ================'
 info "A usage-validation : $RES_A"
 info "B module-listing   : $RES_B"
@@ -380,9 +398,10 @@ info "I symlink-refusal : $RES_I"
 info "J sandbox-boundary: $RES_J"
 info "K trusted-path    : $RES_K"
 info "L sqlite-discovery: $RES_L"
+info "M spotlight-result: $RES_M"
 
 overall=0
-for r in "$RES_A" "$RES_B" "$RES_C" "$RES_D" "$RES_E" "$RES_F" "$RES_G" "$RES_H" "$RES_I" "$RES_J" "$RES_K" "$RES_L"; do
+for r in "$RES_A" "$RES_B" "$RES_C" "$RES_D" "$RES_E" "$RES_F" "$RES_G" "$RES_H" "$RES_I" "$RES_J" "$RES_K" "$RES_L" "$RES_M"; do
   [ "$r" = 'PASS' ] || overall=1
 done
 if [ "$overall" -ne 0 ]; then

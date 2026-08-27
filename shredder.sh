@@ -1271,12 +1271,19 @@ module_spotlight() {
         log_debug "test mode: Spotlight erase-and-rebuild skipped"
     elif [ "$DRY_RUN" -eq 1 ]; then
         log_debug "[DRY RUN] would erase and rebuild the Spotlight index (mdutil -E)"
+        CLEANED_COUNT=$((CLEANED_COUNT + 1))
     elif command -v mdutil >/dev/null 2>&1; then
-        if ! mdutil -E /System/Volumes/Data >/dev/null 2>&1; then
-            mdutil -E / >/dev/null 2>&1 || log_warn "mdutil -E failed for both the data volume and /"
+        if mdutil -E /System/Volumes/Data >/dev/null 2>&1 \
+            || mdutil -E / >/dev/null 2>&1; then
+            log_debug "requested Spotlight index erase and rebuild"
+            CLEANED_COUNT=$((CLEANED_COUNT + 1))
+        else
+            log_warn "mdutil -E failed for both the data volume and /"
+            FAILED_COUNT=$((FAILED_COUNT + 1))
         fi
     else
-        log_debug "mdutil unavailable; skipping Spotlight index erase"
+        log_warn "mdutil unavailable; cannot erase the Spotlight index"
+        FAILED_COUNT=$((FAILED_COUNT + 1))
     fi
     return 0
 }
