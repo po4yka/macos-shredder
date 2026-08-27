@@ -9,7 +9,7 @@ Files:
 
 | Script                 | Role                                                        |
 | ---------------------- | ----------------------------------------------------------- |
-| `run-tests.sh`         | orchestrator — runs phases A–I, reports PASS/FAIL per phase |
+| `run-tests.sh`         | orchestrator — runs phases A–J, reports PASS/FAIL per phase |
 | `create-artifacts.sh`  | builds the deterministic sandbox fixture tree (+ manifest)  |
 | `verify-cleanup.sh`    | asserts post-cleaning state (`force`) or byte-stability (`dryrun`) |
 | `README.md`            | this document                                               |
@@ -113,6 +113,8 @@ Exit codes: `run-tests.sh` → `0` all phases passed, `1` any phase failed,
   the owner-UID command wrapper when the caller UID differs.
 - **I — symlink refusal**: the adversarial user-home symlinks are tested
   separately and must produce exit `2` with the exact expected failure count.
+- **J — sandbox boundary**: a symlink in a sandbox system path must be refused;
+  all targets outside the marked root must survive unchanged.
 
 ## Requirements
 

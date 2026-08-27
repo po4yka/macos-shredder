@@ -193,41 +193,51 @@ on_interrupt() {
 ###############################################################################
 # SECTION: Safe operation helpers
 #
-# These four helpers are the ONLY places where raw rm / truncate / sqlite
+# These helpers are the ONLY places where raw rm / truncate / sqlite
 # mutations happen. They are DRY_RUN-aware, they emit debug detail when
 # DEBUG=1, and they keep the global CLEANED_COUNT / FAILED_COUNT honest.
 ###############################################################################
 
-# Refuse mutations through symlink components inside user-controlled homes.
-# System paths such as /var are symlinks on macOS, so this check is scoped to
-# USERS_DIR where an unprivileged user can prepare a path before a root run.
-guard_user_target() {
+# Refuse sandbox escapes and mutations through symlink components inside
+# user-controlled homes. Real system paths such as /var may be symlinks.
+guard_mutation_target() {
     local target="$1"
-    local relative user_home cursor parent
-    case "$target" in
-        "$USERS_DIR"/*) ;;
-        *) return 0 ;;
-    esac
-    relative="${target#"$USERS_DIR"/}"
-    user_home="$USERS_DIR/${relative%%/*}"
+    local relative boundary cursor parent
+    if [ "$TEST_MODE" -eq 1 ]; then
+        case "$target" in
+            "$SANDBOX"|"$SANDBOX"/*) boundary="$SANDBOX" ;;
+            *)
+                log_warn "refusing mutation outside sandbox: $target"
+                [ "$DRY_RUN" -eq 1 ] || FAILED_COUNT=$((FAILED_COUNT + 1))
+                return 1
+                ;;
+        esac
+    else
+        case "$target" in
+            "$USERS_DIR"/*) ;;
+            *) return 0 ;;
+        esac
+        relative="${target#"$USERS_DIR"/}"
+        boundary="$USERS_DIR/${relative%%/*}"
+    fi
     cursor="$target"
     while :; do
         if [ -L "$cursor" ]; then
             if [ "$DRY_RUN" -eq 1 ]; then
-                log_debug "[DRY RUN] would refuse user path with symlink component: $target"
+                log_debug "[DRY RUN] would refuse path with symlink component: $target"
             else
-                log_warn "refusing user path with symlink component: $target"
+                log_warn "refusing path with symlink component: $target"
                 FAILED_COUNT=$((FAILED_COUNT + 1))
             fi
             return 1
         fi
-        [ "$cursor" = "$user_home" ] && return 0
+        [ "$cursor" = "$boundary" ] && return 0
         parent="${cursor%/*}"
         if [ "$parent" = "$cursor" ]; then
             if [ "$DRY_RUN" -eq 1 ]; then
-                log_debug "[DRY RUN] would refuse user path outside its home: $target"
+                log_debug "[DRY RUN] would refuse path outside mutation boundary: $target"
             else
-                log_warn "refusing user path outside its home: $target"
+                log_warn "refusing path outside mutation boundary: $target"
                 FAILED_COUNT=$((FAILED_COUNT + 1))
             fi
             return 1
@@ -237,7 +247,7 @@ guard_user_target() {
 }
 
 # Run mutations below /Users as the owner of that home. The path can change
-# after guard_user_target() returns, so privilege reduction is the security
+# after guard_mutation_target() returns, so privilege reduction is the security
 # boundary for symlink races; system targets keep the caller's root context.
 run_target_command() {
     local target="$1"
@@ -289,7 +299,7 @@ remove_path() {
     if [ -z "$target" ]; then
         return 0
     fi
-    guard_user_target "$target" || return 0
+    guard_mutation_target "$target" || return 0
     if [ ! -e "$target" ] && [ ! -L "$target" ]; then
         log_debug "not present, skipping: $target"
         return 0
@@ -325,7 +335,7 @@ truncate_file() {
     if [ -z "$target" ]; then
         return 0
     fi
-    guard_user_target "$target" || return 0
+    guard_mutation_target "$target" || return 0
     if [ ! -f "$target" ]; then
         log_debug "not a regular file, skipping: $target"
         return 0
@@ -358,7 +368,7 @@ clear_dir_contents() {
         log_debug "directory not present, skipping: <empty>"
         return 0
     fi
-    guard_user_target "$dir" || return 0
+    guard_mutation_target "$dir" || return 0
     if [ ! -d "$dir" ]; then
         log_debug "directory not present, skipping: $dir"
         return 0
@@ -389,7 +399,7 @@ sqlite_purge() {
         log_debug "database not present, skipping: <empty>"
         return 0
     fi
-    guard_user_target "$db" || return 0
+    guard_mutation_target "$db" || return 0
     if [ ! -f "$db" ]; then
         log_debug "database not present, skipping: $db"
         return 0
@@ -751,7 +761,7 @@ probe_full_disk_access() {
     while IFS=$'\t' read -r u h uid; do
         safari_dir="$h/Library/Safari"
         [ -d "$safari_dir" ] || continue
-        guard_user_target "$safari_dir" || return 1
+        guard_mutation_target "$safari_dir" || return 1
         log_debug "probing Full Disk Access via: $safari_dir"
         if ! stat "$safari_dir" >/dev/null 2>&1; then
             return 1
@@ -1158,7 +1168,7 @@ module_fileevents() {
 purge_knowledge_db() {
     local db="$1"
     local tbl tables
-    guard_user_target "$db" || return 0
+    guard_mutation_target "$db" || return 0
     [ -f "$db" ] || return 0
     if ! command -v sqlite3 >/dev/null 2>&1; then
         log_debug "sqlite3 unavailable; removing KnowledgeC database instead: $db"

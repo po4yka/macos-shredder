@@ -12,6 +12,7 @@
 #   G  host isolation     sandbox mode -> no defaults/qlmanage execution
 #   H  least privilege    user-home mutations -> owner UID command wrapper
 #   I  symlink refusal     adversarial fixture -> exact expected failures
+#   J  sandbox boundary    system-path symlink -> no sandbox escape
 #
 # Exit codes: 0 all phases passed; 1 one or more phases failed;
 #             77 shredder.sh not built yet.
@@ -62,6 +63,7 @@ RES_F='FAIL'
 RES_G='FAIL'
 RES_H='FAIL'
 RES_I='FAIL'
+RES_J='FAIL'
 
 phase_a_usage_validation() {
   local sb="$WORK/sandbox-a" log="$WORK/phase-a.log" rc=0 ok=1
@@ -242,6 +244,26 @@ phase_i_symlink_refusal() {
     && grep -q 'must survive linked-home test' "$sb/escape-target/mallory-home/.zsh_history"
 }
 
+phase_j_sandbox_boundary() {
+  local sb="$WORK/sandbox-j" outside="$WORK/sandbox-j-outside"
+  local log="$WORK/phase-j.log" rc=0
+  mkdir -p "$sb/Library/Preferences" "$sb/var/log" \
+    "$outside/SystemConfiguration/com.apple.wifi.known-networks"
+  : > "$sb/.macos-shredder-test-root"
+  printf 'airport sentinel\n' > "$outside/SystemConfiguration/com.apple.airport.preferences.plist"
+  printf 'tracer sentinel\n' > "$outside/SystemConfiguration/com.apple.wifi.message-tracer.plist"
+  printf 'network sentinel\n' > "$outside/SystemConfiguration/com.apple.wifi.known-networks/network.plist"
+  ln -s "$outside/SystemConfiguration" "$sb/Library/Preferences/SystemConfiguration"
+  info 'running: sandbox system-path symlinks must be refused'
+  SHREDDER_ROOT="$sb" bash "$SHREDDER" --force --modules wifi >"$log" 2>&1 || rc=$?
+  info "exit code: $rc (expected 2)"
+  [ "$rc" -eq 2 ] \
+    && grep -q 'Failed operations: 3' "$log" \
+    && grep -q 'airport sentinel' "$outside/SystemConfiguration/com.apple.airport.preferences.plist" \
+    && grep -q 'tracer sentinel' "$outside/SystemConfiguration/com.apple.wifi.message-tracer.plist" \
+    && grep -q 'network sentinel' "$outside/SystemConfiguration/com.apple.wifi.known-networks/network.plist"
+}
+
 preserve_failure_artifacts() {
   local dest="$REPO_ROOT/tests-last-run"
   mkdir -p "$dest"
@@ -285,6 +307,10 @@ info '=== PHASE I: symlink refusal ==='
 if phase_i_symlink_refusal; then RES_I='PASS'; fi
 info "PHASE I result: $RES_I"
 
+info '=== PHASE J: sandbox boundary ==='
+if phase_j_sandbox_boundary; then RES_J='PASS'; fi
+info "PHASE J result: $RES_J"
+
 info '================ SUMMARY ================'
 info "A usage-validation : $RES_A"
 info "B module-listing   : $RES_B"
@@ -295,9 +321,10 @@ info "F confirmation    : $RES_F"
 info "G host-isolation  : $RES_G"
 info "H least-privilege : $RES_H"
 info "I symlink-refusal : $RES_I"
+info "J sandbox-boundary: $RES_J"
 
 overall=0
-for r in "$RES_A" "$RES_B" "$RES_C" "$RES_D" "$RES_E" "$RES_F" "$RES_G" "$RES_H" "$RES_I"; do
+for r in "$RES_A" "$RES_B" "$RES_C" "$RES_D" "$RES_E" "$RES_F" "$RES_G" "$RES_H" "$RES_I" "$RES_J"; do
   [ "$r" = 'PASS' ] || overall=1
 done
 if [ "$overall" -ne 0 ]; then
