@@ -361,6 +361,17 @@ run_dryrun_checks() { # run_dryrun_checks <root> <manifest>
       fi
       fail 'dryrun: directory preserved' "$rel" 'directory missing'
       mismatches=$((mismatches + 1))
+    elif [[ "$kind" = link:* ]]; then
+      if [ -L "$abs" ]; then
+        actual="link:$(readlink "$abs")"
+      else
+        actual='<missing>'
+      fi
+      if [ "$actual" = "$kind" ]; then
+        continue
+      fi
+      fail 'dryrun: symlink unchanged' "$rel $kind" "$actual"
+      mismatches=$((mismatches + 1))
     else
       if [ -f "$abs" ]; then
         actual=$(sha256_file "$abs")
@@ -380,7 +391,7 @@ run_dryrun_checks() { # run_dryrun_checks <root> <manifest>
   fi
 
   expected_set=$(awk -F'\t' '$1 != "dir" { print "./" $2 }' "$manifest" | LC_ALL=C sort)
-  current_set=$(cd "$root" && find . -type f -print | LC_ALL=C sort)
+  current_set=$(cd "$root" && find . \( -type f -o -type l \) -print | LC_ALL=C sort)
   if [ "$current_set" = "$expected_set" ]; then
     pass 'dryrun: no files added or removed'
   else

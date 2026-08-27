@@ -39,9 +39,9 @@ Usage: create-artifacts.sh <SANDBOX_ROOT> [--manifest <FILE>]
 
 Builds the deterministic sandbox fixture tree under <SANDBOX_ROOT>.
 
-  --manifest <FILE>  write a stability manifest: "<sha256>\t<relative path>"
-                     for every regular file and "dir\t<relative path>" for
-                     every directory (consumed by verify-cleanup.sh --phase dryrun)
+  --manifest <FILE>  write a stability manifest for every directory, regular
+                     file, and symbolic link (consumed by verify-cleanup.sh
+                     --phase dryrun)
 EOF
 }
 
@@ -188,6 +188,11 @@ write_manifest() { # write_manifest <file>
       rel="${rel#./}"
       [ -n "$rel" ] || continue
       printf '%s\t%s\n' "$(sha256_file "$SANDBOX_ROOT/$rel")" "$rel"
+    done
+    (cd "$SANDBOX_ROOT" && find . -type l -print | LC_ALL=C sort) | while IFS= read -r rel; do
+      rel="${rel#./}"
+      [ -n "$rel" ] || continue
+      printf 'link:%s\t%s\n' "$(readlink "$SANDBOX_ROOT/$rel")" "$rel"
     done
   } > "$tmp"
   mv "$tmp" "$out"

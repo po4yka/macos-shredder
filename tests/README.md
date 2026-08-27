@@ -98,11 +98,11 @@ Exit codes: `run-tests.sh` → `0` all phases passed, `1` any phase failed,
   - output contains `Total items cleaned:` with a count > 0 and exactly zero
     failed operations;
   - a corrupt SQLite database makes verification fail closed.
-- **D — dry-run byte-stability**: `create-artifacts.sh --manifest` captures a
-  sha256 manifest before the run; after `shredder.sh -n -f --debug` the
-  manifest must recompute byte-identical with an identical file set → proves
-  there is **no unguarded destructive operation** behind the dry-run flag
-  (the latent-bomb regression class).
+- **D — dry-run byte-stability**: `create-artifacts.sh --manifest` captures
+  directories, file hashes, and symlink targets before the run; after
+  `shredder.sh -n -f --debug` all entries and the file/link set must remain
+  identical → proves there is **no unguarded destructive operation** behind
+  the dry-run flag (the latent-bomb regression class).
 - **E — sandbox guard**: an unmarked `SHREDDER_ROOT` must fail before any
   module runs. Fixture roots carry `.macos-shredder-test-root`.
 - **F — confirmation guard**: a non-interactive destructive run without

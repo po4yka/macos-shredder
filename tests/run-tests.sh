@@ -160,7 +160,8 @@ phase_c_force_clean() {
 }
 
 phase_d_dryrun_safety() {
-  local sb="$WORK/sandbox-d" manifest="$WORK/manifest.tsv" log="$WORK/phase-d.log" rc=0 ok=1
+  local sb="$WORK/sandbox-d" manifest="$WORK/manifest.tsv" log="$WORK/phase-d.log"
+  local negative="$WORK/phase-d-negative.log" rc=0 ok=1
   info "creating artifacts: $sb"
   bash "$CREATE_ARTIFACTS" "$sb" --manifest "$manifest" >"$WORK/phase-d-create.log"
   info 'running: SHREDDER_ROOT=<sandbox> bash shredder.sh -n -f --debug (dry run)'
@@ -174,6 +175,16 @@ phase_d_dryrun_safety() {
     info 'dry-run stability: PASS'
   else
     info 'dry-run stability: FAIL'
+    ok=0
+  fi
+  ln -sfn 'changed-target' "$sb/var/audit/current"
+  if bash "$VERIFY_CLEANUP" "$sb" --manifest "$manifest" --phase dryrun >"$negative" 2>&1; then
+    info 'changed symlink unexpectedly passed dry-run verification'
+    ok=0
+  elif grep -q 'symlink unchanged' "$negative"; then
+    info 'changed symlink: correctly detected'
+  else
+    info 'changed symlink failed verification for an unexpected reason'
     ok=0
   fi
   [ "$ok" -eq 1 ]
