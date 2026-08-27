@@ -463,8 +463,9 @@ enumerate_users() {
     emit_dir_users
 }
 
-# run_as_user USER UID HOME CMD... - run a per-user command in the REAL user's
-# context (fixes sudo-context bugs where defaults/qlmanage acted on root).
+# run_as_user USER UID HOME CMD... - run a per-user command in the real user's
+# context. Sandbox mode refuses host commands; modules must use fixture-only
+# fallbacks there.
 run_as_user() {
     local user="$1"
     local uid="$2"
@@ -472,8 +473,8 @@ run_as_user() {
     shift 3
     [ $# -gt 0 ] || return 0
     if [ "$TEST_MODE" -eq 1 ]; then
-        HOME="$home" "$@"
-        return $?
+        log_debug "test mode: refusing host command for user '$user': $1"
+        return 1
     fi
     if [ -n "$uid" ] && command -v launchctl >/dev/null 2>&1; then
         if launchctl asuser "$uid" sudo -u "$user" env HOME="$home" "$@" >/dev/null 2>&1; then
@@ -1201,6 +1202,8 @@ module_quicklook() {
         if [ "$DRY_RUN" -eq 1 ]; then
             log_debug "[DRY RUN] would reset Quick Look cache for user '$u' (qlmanage -r cache)"
             CLEANED_COUNT=$((CLEANED_COUNT + 1))
+        elif [ "$TEST_MODE" -eq 1 ]; then
+            log_debug "test mode: Quick Look host cache reset skipped for user '$u'"
         elif ! command -v qlmanage >/dev/null 2>&1; then
             log_debug "qlmanage unavailable; skipping Quick Look reset for user '$u'"
         elif run_as_user "$u" "$uid" "$h" qlmanage -r cache >/dev/null 2>&1; then

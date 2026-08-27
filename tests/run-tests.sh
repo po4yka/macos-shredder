@@ -9,6 +9,7 @@
 #   D  dry-run safety     artifacts+manifest -> -n -f -> byte-identical state
 #   E  sandbox guard      unmarked SHREDDER_ROOT -> fatal refusal
 #   F  confirmation       non-interactive real run -> refusal + unchanged data
+#   G  host isolation     sandbox mode -> no defaults/qlmanage execution
 #
 # Exit codes: 0 all phases passed; 1 one or more phases failed;
 #             77 shredder.sh not built yet.
@@ -56,6 +57,7 @@ RES_C='FAIL'
 RES_D='FAIL'
 RES_E='FAIL'
 RES_F='FAIL'
+RES_G='FAIL'
 
 phase_a_usage_validation() {
   local sb="$WORK/sandbox-a" log="$WORK/phase-a.log" rc=0 ok=1
@@ -178,6 +180,23 @@ phase_f_confirmation_guard() {
     && grep -q 'SHREDTEST-HIST' "$sb/Users/alice/.zsh_history"
 }
 
+phase_g_host_command_isolation() {
+  local sb="$WORK/sandbox-g" bin="$WORK/sandbox-g-bin" calls="$WORK/phase-g-host-calls.log"
+  local log="$WORK/phase-g.log" rc=0 cmd
+  bash "$CREATE_ARTIFACTS" "$sb" >"$WORK/phase-g-create.log"
+  mkdir -p "$bin"
+  for cmd in defaults qlmanage; do
+    # shellcheck disable=SC2016 # variables expand when the generated stub runs
+    printf '#!/bin/sh\nprintf "%%s\\n" "$0" >> "$SHREDDER_HOST_COMMAND_LOG"\n' >"$bin/$cmd"
+    chmod +x "$bin/$cmd"
+  done
+  info 'running: sandbox mode must not execute defaults or qlmanage'
+  PATH="$bin:$PATH" SHREDDER_HOST_COMMAND_LOG="$calls" SHREDDER_ROOT="$sb" \
+    bash "$SHREDDER" --force --modules usage,quicklook >"$log" 2>&1 || rc=$?
+  info "exit code: $rc (expected 0)"
+  [ "$rc" -eq 0 ] && [ ! -e "$calls" ]
+}
+
 preserve_failure_artifacts() {
   local dest="$REPO_ROOT/tests-last-run"
   mkdir -p "$dest"
@@ -209,6 +228,10 @@ info '=== PHASE F: confirmation guard ==='
 if phase_f_confirmation_guard; then RES_F='PASS'; fi
 info "PHASE F result: $RES_F"
 
+info '=== PHASE G: host-command isolation ==='
+if phase_g_host_command_isolation; then RES_G='PASS'; fi
+info "PHASE G result: $RES_G"
+
 info '================ SUMMARY ================'
 info "A usage-validation : $RES_A"
 info "B module-listing   : $RES_B"
@@ -216,9 +239,10 @@ info "C force-clean      : $RES_C"
 info "D dry-run-safety   : $RES_D"
 info "E sandbox-guard   : $RES_E"
 info "F confirmation    : $RES_F"
+info "G host-isolation  : $RES_G"
 
 overall=0
-for r in "$RES_A" "$RES_B" "$RES_C" "$RES_D" "$RES_E" "$RES_F"; do
+for r in "$RES_A" "$RES_B" "$RES_C" "$RES_D" "$RES_E" "$RES_F" "$RES_G"; do
   [ "$r" = 'PASS' ] || overall=1
 done
 if [ "$overall" -ne 0 ]; then

@@ -9,7 +9,7 @@ Files:
 
 | Script                 | Role                                                        |
 | ---------------------- | ----------------------------------------------------------- |
-| `run-tests.sh`         | orchestrator — runs phases A–F, reports PASS/FAIL per phase |
+| `run-tests.sh`         | orchestrator — runs phases A–G, reports PASS/FAIL per phase |
 | `create-artifacts.sh`  | builds the deterministic sandbox fixture tree (+ manifest)  |
 | `verify-cleanup.sh`    | asserts post-cleaning state (`force`) or byte-stability (`dryrun`) |
 | `README.md`            | this document                                               |
@@ -106,6 +106,8 @@ Exit codes: `run-tests.sh` → `0` all phases passed, `1` any phase failed,
   module runs. Fixture roots carry `.macos-shredder-test-root`.
 - **F — confirmation guard**: a non-interactive destructive run without
   `--force` must abort without changing the fixture.
+- **G — host-command isolation**: sandbox mode must not execute `defaults` or
+  `qlmanage`; command stubs turn any attempted invocation into a test failure.
 
 ## Requirements
 
