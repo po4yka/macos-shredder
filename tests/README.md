@@ -9,7 +9,7 @@ Files:
 
 | Script                 | Role                                                        |
 | ---------------------- | ----------------------------------------------------------- |
-| `run-tests.sh`         | orchestrator — runs phases A–G, reports PASS/FAIL per phase |
+| `run-tests.sh`         | orchestrator — runs phases A–H, reports PASS/FAIL per phase |
 | `create-artifacts.sh`  | builds the deterministic sandbox fixture tree (+ manifest)  |
 | `verify-cleanup.sh`    | asserts post-cleaning state (`force`) or byte-stability (`dryrun`) |
 | `README.md`            | this document                                               |
@@ -108,6 +108,8 @@ Exit codes: `run-tests.sh` → `0` all phases passed, `1` any phase failed,
   `--force` must abort without changing the fixture.
 - **G — host-command isolation**: sandbox mode must not execute `defaults` or
   `qlmanage`; command stubs turn any attempted invocation into a test failure.
+- **H — least-privilege user commands**: user-home mutations must pass through
+  the owner-UID command wrapper when the caller UID differs.
 
 ## Requirements
 

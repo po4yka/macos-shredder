@@ -10,6 +10,7 @@
 #   E  sandbox guard      unmarked SHREDDER_ROOT -> fatal refusal
 #   F  confirmation       non-interactive real run -> refusal + unchanged data
 #   G  host isolation     sandbox mode -> no defaults/qlmanage execution
+#   H  least privilege    user-home mutations -> owner UID command wrapper
 #
 # Exit codes: 0 all phases passed; 1 one or more phases failed;
 #             77 shredder.sh not built yet.
@@ -58,6 +59,7 @@ RES_D='FAIL'
 RES_E='FAIL'
 RES_F='FAIL'
 RES_G='FAIL'
+RES_H='FAIL'
 
 phase_a_usage_validation() {
   local sb="$WORK/sandbox-a" log="$WORK/phase-a.log" rc=0 ok=1
@@ -197,6 +199,25 @@ phase_g_host_command_isolation() {
   [ "$rc" -eq 0 ] && [ ! -e "$calls" ]
 }
 
+phase_h_user_owner_commands() {
+  local sb="$WORK/sandbox-h" bin="$WORK/sandbox-h-bin" calls="$WORK/phase-h-sudo.log"
+  local log="$WORK/phase-h.log" rc=0
+  bash "$CREATE_ARTIFACTS" "$sb" >"$WORK/phase-h-create.log"
+  mkdir -p "$bin"
+  printf '#!/bin/sh\nprintf "4242\\n"\n' >"$bin/stat"
+  printf '#!/bin/sh\nprintf "999\\n"\n' >"$bin/id"
+  # shellcheck disable=SC2016 # variables expand when the generated stub runs
+  printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "$SHREDDER_TARGET_COMMAND_LOG"\nshift 3\nexec "$@"\n' >"$bin/sudo"
+  chmod +x "$bin/stat" "$bin/id" "$bin/sudo"
+  info 'running: user-home mutations must use the owner UID command wrapper'
+  PATH="$bin:$PATH" SHREDDER_TARGET_COMMAND_LOG="$calls" SHREDDER_ROOT="$sb" \
+    bash "$SHREDDER" --force --modules shell >"$log" 2>&1 || rc=$?
+  info "exit code: $rc (expected 0)"
+  [ "$rc" -eq 0 ] \
+    && grep -q -- '-u #4242 --' "$calls" \
+    && [ ! -s "$sb/Users/alice/.zsh_history" ]
+}
+
 preserve_failure_artifacts() {
   local dest="$REPO_ROOT/tests-last-run"
   mkdir -p "$dest"
@@ -232,6 +253,10 @@ info '=== PHASE G: host-command isolation ==='
 if phase_g_host_command_isolation; then RES_G='PASS'; fi
 info "PHASE G result: $RES_G"
 
+info '=== PHASE H: least-privilege user commands ==='
+if phase_h_user_owner_commands; then RES_H='PASS'; fi
+info "PHASE H result: $RES_H"
+
 info '================ SUMMARY ================'
 info "A usage-validation : $RES_A"
 info "B module-listing   : $RES_B"
@@ -240,9 +265,10 @@ info "D dry-run-safety   : $RES_D"
 info "E sandbox-guard   : $RES_E"
 info "F confirmation    : $RES_F"
 info "G host-isolation  : $RES_G"
+info "H least-privilege : $RES_H"
 
 overall=0
-for r in "$RES_A" "$RES_B" "$RES_C" "$RES_D" "$RES_E" "$RES_F" "$RES_G"; do
+for r in "$RES_A" "$RES_B" "$RES_C" "$RES_D" "$RES_E" "$RES_F" "$RES_G" "$RES_H"; do
   [ "$r" = 'PASS' ] || overall=1
 done
 if [ "$overall" -ne 0 ]; then

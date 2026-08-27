@@ -236,6 +236,49 @@ guard_user_target() {
     done
 }
 
+# Run mutations below /Users as the owner of that home. The path can change
+# after guard_user_target() returns, so privilege reduction is the security
+# boundary for symlink races; system targets keep the caller's root context.
+run_target_command() {
+    local target="$1"
+    shift
+    local relative user_home owner_uid current_uid stat_bin id_bin sudo_bin
+    [ $# -gt 0 ] || return 1
+    case "$target" in
+        "$USERS_DIR"/*) ;;
+        *) "$@"; return $? ;;
+    esac
+    relative="${target#"$USERS_DIR"/}"
+    user_home="$USERS_DIR/${relative%%/*}"
+    if [ "$TEST_MODE" -eq 1 ]; then
+        stat_bin="$(command -v stat 2>/dev/null || true)"
+        id_bin="$(command -v id 2>/dev/null || true)"
+        sudo_bin="$(command -v sudo 2>/dev/null || true)"
+    else
+        stat_bin="/usr/bin/stat"
+        id_bin="/usr/bin/id"
+        sudo_bin="/usr/bin/sudo"
+    fi
+    [ -x "$stat_bin" ] && [ -x "$id_bin" ] || return 1
+    owner_uid="$("$stat_bin" -f '%u' "$user_home" 2>/dev/null \
+        || "$stat_bin" -c '%u' "$user_home" 2>/dev/null \
+        || true)"
+    case "$owner_uid" in
+        ''|*[!0-9]*) return 1 ;;
+    esac
+    if [ "$TEST_MODE" -eq 0 ] && [ "$owner_uid" -eq 0 ]; then
+        log_warn "refusing root-owned home under $USERS_DIR: $user_home"
+        return 1
+    fi
+    current_uid="$("$id_bin" -u)"
+    if [ "$owner_uid" = "$current_uid" ]; then
+        "$@"
+        return $?
+    fi
+    [ -x "$sudo_bin" ] || return 1
+    "$sudo_bin" -u "#$owner_uid" -- "$@"
+}
+
 # remove_path PATH - recursively delete a file/dir/symlink after an
 # existence check. Broken symlinks are handled via the -L test.
 remove_path() {
@@ -253,7 +296,7 @@ remove_path() {
         CLEANED_COUNT=$((CLEANED_COUNT + 1))
         return 0
     fi
-    if rm -rf -- "$target" 2>/dev/null; then
+    if run_target_command "$target" /bin/rm -rf -- "$target" 2>/dev/null; then
         log_debug "removed: $target"
         CLEANED_COUNT=$((CLEANED_COUNT + 1))
     else
@@ -279,7 +322,8 @@ truncate_file() {
         CLEANED_COUNT=$((CLEANED_COUNT + 1))
         return 0
     fi
-    if : > "$target" 2>/dev/null; then
+    # shellcheck disable=SC2016 # $1 expands inside the unprivileged child shell
+    if run_target_command "$target" /bin/sh -c ': > "$1"' sh "$target" 2>/dev/null; then
         log_debug "truncated: $target"
         CLEANED_COUNT=$((CLEANED_COUNT + 1))
     else
@@ -327,6 +371,7 @@ clear_dir_contents() {
 sqlite_purge() {
     local db="$1"
     local sql="$2"
+    local sqlite_bin
     if [ -z "$db" ]; then
         log_debug "database not present, skipping: <empty>"
         return 0
@@ -336,7 +381,8 @@ sqlite_purge() {
         log_debug "database not present, skipping: $db"
         return 0
     fi
-    if ! command -v sqlite3 >/dev/null 2>&1; then
+    sqlite_bin="$(command -v sqlite3 2>/dev/null || true)"
+    if [ -z "$sqlite_bin" ]; then
         log_debug "sqlite3 unavailable; removing database instead: $db"
         remove_path "$db"
         return 0
@@ -346,7 +392,7 @@ sqlite_purge() {
         CLEANED_COUNT=$((CLEANED_COUNT + 1))
         return 0
     fi
-    if sqlite3 "$db" "$sql" >/dev/null 2>&1; then
+    if run_target_command "$db" "$sqlite_bin" "$db" "$sql" >/dev/null 2>&1; then
         log_debug "sqlite ok [$sql]: $db"
         CLEANED_COUNT=$((CLEANED_COUNT + 1))
     else
