@@ -1508,6 +1508,7 @@ main() {
     if [ "$TEST_MODE" -eq 0 ]; then
         if ! probe_full_disk_access; then
             warn_fda_missing
+            [ "$DRY_RUN" -eq 1 ] || FAILED_COUNT=$((FAILED_COUNT + 1))
         fi
     fi
 
