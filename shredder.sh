@@ -1219,7 +1219,6 @@ clean_recent_items_for_user() {
     local u="$1"
     local h="$2"
     local uid="$3"
-    local key ri_ok
     if [ "$DRY_RUN" -eq 1 ]; then
         log_debug "[DRY RUN] would clear recent items for user '$u'"
         CLEANED_COUNT=$((CLEANED_COUNT + 1))
@@ -1230,13 +1229,7 @@ clean_recent_items_for_user() {
         remove_path "$h/Library/Preferences/com.apple.recentitems.plist"
         return 0
     fi
-    ri_ok=0
-    for key in RecentDocuments RecentApplications RecentServers; do
-        if run_as_user "$u" "$uid" "$h" defaults delete com.apple.recentitems "$key" >/dev/null 2>&1; then
-            ri_ok=1
-        fi
-    done
-    if [ "$ri_ok" -eq 1 ]; then
+    if run_as_user "$u" "$uid" "$h" defaults delete com.apple.recentitems >/dev/null 2>&1; then
         log_debug "cleared recent items for user '$u'"
         CLEANED_COUNT=$((CLEANED_COUNT + 1))
     else
