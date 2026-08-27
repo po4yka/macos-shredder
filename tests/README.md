@@ -9,7 +9,7 @@ Files:
 
 | Script                 | Role                                                        |
 | ---------------------- | ----------------------------------------------------------- |
-| `run-tests.sh`         | orchestrator — runs phases A–K, reports PASS/FAIL per phase |
+| `run-tests.sh`         | orchestrator — runs phases A–L, reports PASS/FAIL per phase |
 | `create-artifacts.sh`  | builds the deterministic sandbox fixture tree (+ manifest)  |
 | `verify-cleanup.sh`    | asserts post-cleaning state (`force`) or byte-stability (`dryrun`) |
 | `README.md`            | this document                                               |
@@ -117,6 +117,8 @@ Exit codes: `run-tests.sh` → `0` all phases passed, `1` any phase failed,
   all targets outside the marked root must survive unchanged.
 - **K — trusted PATH**: real mode must ignore commands injected through the
   caller's `PATH`; sandbox mode keeps `PATH` injection for isolated test stubs.
+- **L — SQLite discovery**: an error while inspecting KnowledgeC tables must
+  produce exit `2` instead of continuing to `VACUUM` and reporting success.
 
 ## Requirements
 

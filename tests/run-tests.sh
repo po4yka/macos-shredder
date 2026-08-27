@@ -14,6 +14,7 @@
 #   I  symlink refusal     adversarial fixture -> exact expected failures
 #   J  sandbox boundary    system-path symlink -> no sandbox escape
 #   K  trusted PATH        real mode ignores caller-provided commands
+#   L  SQLite discovery    KnowledgeC inspection errors fail closed
 #
 # Exit codes: 0 all phases passed; 1 one or more phases failed;
 #             77 shredder.sh not built yet.
@@ -66,6 +67,7 @@ RES_H='FAIL'
 RES_I='FAIL'
 RES_J='FAIL'
 RES_K='FAIL'
+RES_L='FAIL'
 
 phase_a_usage_validation() {
   local sb="$WORK/sandbox-a" log="$WORK/phase-a.log" rc=0 ok=1
@@ -284,6 +286,21 @@ phase_k_trusted_path() {
   [ "$rc" -eq 64 ] && [ ! -e "$calls" ]
 }
 
+phase_l_sqlite_discovery() {
+  local sb="$WORK/sandbox-l" bin="$WORK/phase-l-bin" log="$WORK/phase-l.log" rc=0
+  bash "$CREATE_ARTIFACTS" "$sb" >"$WORK/phase-l-create.log"
+  mkdir -p "$bin"
+  # Fail table discovery but accept every later SQL statement. Before the fix,
+  # the script hid this error and reported a successful cleanup.
+  printf '#!/bin/sh\ncase "$*" in *"SELECT name FROM sqlite_master"*) exit 1 ;; *) exit 0 ;; esac\n' >"$bin/sqlite3"
+  chmod +x "$bin/sqlite3"
+  info 'running: KnowledgeC table discovery errors must fail closed'
+  PATH="$bin:$PATH" SHREDDER_ROOT="$sb" \
+    bash "$SHREDDER" --force --modules usage >"$log" 2>&1 || rc=$?
+  info "exit code: $rc (expected 2)"
+  [ "$rc" -eq 2 ] && grep -q 'Failed operations: 3' "$log"
+}
+
 preserve_failure_artifacts() {
   local dest="$REPO_ROOT/tests-last-run"
   mkdir -p "$dest"
@@ -335,6 +352,10 @@ info '=== PHASE K: trusted PATH ==='
 if phase_k_trusted_path; then RES_K='PASS'; fi
 info "PHASE K result: $RES_K"
 
+info '=== PHASE L: SQLite discovery ==='
+if phase_l_sqlite_discovery; then RES_L='PASS'; fi
+info "PHASE L result: $RES_L"
+
 info '================ SUMMARY ================'
 info "A usage-validation : $RES_A"
 info "B module-listing   : $RES_B"
@@ -347,9 +368,10 @@ info "H least-privilege : $RES_H"
 info "I symlink-refusal : $RES_I"
 info "J sandbox-boundary: $RES_J"
 info "K trusted-path    : $RES_K"
+info "L sqlite-discovery: $RES_L"
 
 overall=0
-for r in "$RES_A" "$RES_B" "$RES_C" "$RES_D" "$RES_E" "$RES_F" "$RES_G" "$RES_H" "$RES_I" "$RES_J" "$RES_K"; do
+for r in "$RES_A" "$RES_B" "$RES_C" "$RES_D" "$RES_E" "$RES_F" "$RES_G" "$RES_H" "$RES_I" "$RES_J" "$RES_K" "$RES_L"; do
   [ "$r" = 'PASS' ] || overall=1
 done
 if [ "$overall" -ne 0 ]; then

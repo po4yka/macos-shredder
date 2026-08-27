@@ -1201,9 +1201,13 @@ purge_knowledge_db() {
         CLEANED_COUNT=$((CLEANED_COUNT + 1))
         return 0
     fi
-    tables="$(run_target_command "$db" "$sqlite_bin" "$db" \
+    if ! tables="$(run_target_command "$db" "$sqlite_bin" "$db" \
         "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('ZOBJECT','ZSTRUCTUREDMETADATA');" \
-        2>/dev/null || true)"
+        2>/dev/null)"; then
+        log_warn "failed to inspect KnowledgeC tables: $db"
+        FAILED_COUNT=$((FAILED_COUNT + 1))
+        return 0
+    fi
     while IFS= read -r tbl; do
         [ -n "$tbl" ] || continue
         sqlite_purge "$db" "DELETE FROM $tbl;"
