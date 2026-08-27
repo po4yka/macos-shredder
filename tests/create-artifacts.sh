@@ -113,7 +113,9 @@ build_user_home() { # build_user_home <home-dir>
 
   # --- browser (Safari) ------------------------------------------------------
   local safari="$home/Library/Safari"
-  mkdir -p "$safari" "$home/Library/Caches/com.apple.Safari"
+  mkdir -p "$safari" "$home/Library/Caches/com.apple.Safari" \
+    "$home/Library/Containers/com.apple.Safari/Data/Library/Cookies" \
+    "$home/Library/Cookies"
   printf 'safari history placeholder %s\n' "$MARK_HIST" > "$safari/History.db"
   printf 'wal sidecar %s\n' "$MARK_HIST" > "$safari/History.db-wal"
   printf 'shm sidecar %s\n' "$MARK_HIST" > "$safari/History.db-shm"
@@ -121,6 +123,8 @@ build_user_home() { # build_user_home <home-dir>
   printf '<plist><string>topsites %s</string></plist>\n' "$MARK_HIST" > "$safari/TopSites.plist"
   printf '<plist><string>lastsession %s</string></plist>\n' "$MARK_HIST" > "$safari/LastSession.plist"
   printf 'safari cache blob %s\n' "$MARK_OWN" > "$home/Library/Caches/com.apple.Safari/cache-file"
+  printf 'container cookies %s\n' "$MARK_HIST" > "$home/Library/Containers/com.apple.Safari/Data/Library/Cookies/Cookies.binarycookies"
+  printf 'legacy cookies %s\n' "$MARK_HIST" > "$home/Library/Cookies/Cookies.binarycookies"
 
   # Chromium-family profiles: Default plus a named profile. The second
   # profile catches implementations that only clean Default.

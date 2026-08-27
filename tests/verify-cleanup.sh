@@ -223,6 +223,9 @@ check_user_artifacts_cleaned() { # check_user_artifacts_cleaned <label> <home>
   # browser sidecars
   check_gone "$label: Safari History.db-wal sidecar gone" "$home/Library/Safari/History.db-wal"
   check_gone "$label: Safari History.db-shm sidecar gone" "$home/Library/Safari/History.db-shm"
+  check_gone "$label: Safari container cookies gone" \
+    "$home/Library/Containers/com.apple.Safari/Data/Library/Cookies/Cookies.binarycookies"
+  check_gone "$label: Safari legacy cookies gone" "$home/Library/Cookies/Cookies.binarycookies"
   check_gone "$label: Firefox custom-profile history gone" \
     "$home/Library/Application Support/Firefox/Profiles/abcd1234.work/places.sqlite"
   check_gone "$label: Firefox custom-profile cache gone" \

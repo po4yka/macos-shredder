@@ -49,7 +49,8 @@ Per-user fixtures:
   `.ipython/profile_default/history.sqlite` with WAL/SHM/journal sidecars.
 - `Library/Preferences/com.apple.LaunchServices.QuarantineEventsV2` — real
   SQLite (`LSQuarantineEvent` table + marker row) or text stand-in.
-- Safari: `History.db` with `-wal` / `-shm` sidecars, plists, cache file.
+- Safari: `History.db` with `-wal` / `-shm` sidecars, plists, cache file, and
+  both container and legacy cookie stores.
 - Chrome: `Default` and `Profile 1`; an intermediate Chromium profile symlink
   points outside the user home and must be refused.
 - Firefox: a custom-named profile proves cleanup does not depend on `default`

@@ -1026,6 +1026,8 @@ clean_safari_for_home() {
         remove_path "$saf/Downloads.plist"
         remove_path "$saf/TopSites.plist"
         remove_path "$saf/LastSession.plist"
+        remove_path "$h/Library/Containers/com.apple.Safari/Data/Library/Cookies/Cookies.binarycookies"
+        remove_path "$h/Library/Cookies/Cookies.binarycookies"
     fi
     clear_dir_contents "$h/Library/Caches/com.apple.Safari"
     return 0
