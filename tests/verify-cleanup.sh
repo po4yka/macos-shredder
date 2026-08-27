@@ -156,8 +156,10 @@ check_quarantine_db() { # check_quarantine_db <desc> <db-path>
     return
   fi
   if command -v sqlite3 >/dev/null 2>&1; then
-    n=$(sqlite3 "$db" "SELECT COUNT(*) FROM LSQuarantineEvent WHERE LSQuarantineAgentName LIKE '%SHREDTEST%' OR LSQuarantineDataURLString LIKE '%SHREDTEST%';" 2>/dev/null) || n=0
-    n="${n:-0}"
+    if ! n=$(sqlite3 "$db" "SELECT COUNT(*) FROM LSQuarantineEvent WHERE LSQuarantineAgentName LIKE '%SHREDTEST%' OR LSQuarantineDataURLString LIKE '%SHREDTEST%';" 2>/dev/null); then
+      fail "$desc" 'successful SQLite query' "query failed: $db"
+      return
+    fi
     if [ "$n" -eq 0 ] 2>/dev/null; then
       pass "$desc"
     else
@@ -180,10 +182,14 @@ check_knowledge_db() { # check_knowledge_db <desc> <db-path>
     return
   fi
   if command -v sqlite3 >/dev/null 2>&1; then
-    n1=$(sqlite3 "$db" "SELECT COUNT(*) FROM ZOBJECT WHERE ZVALUESTRING LIKE '%SHREDTEST%';" 2>/dev/null) || n1=0
-    n2=$(sqlite3 "$db" "SELECT COUNT(*) FROM ZSTRUCTUREDMETADATA WHERE ZVALUE LIKE '%SHREDTEST%';" 2>/dev/null) || n2=0
-    n1="${n1:-0}"
-    n2="${n2:-0}"
+    if ! n1=$(sqlite3 "$db" "SELECT COUNT(*) FROM ZOBJECT WHERE ZVALUESTRING LIKE '%SHREDTEST%';" 2>/dev/null); then
+      fail "$desc" 'successful ZOBJECT query' "query failed: $db"
+      return
+    fi
+    if ! n2=$(sqlite3 "$db" "SELECT COUNT(*) FROM ZSTRUCTUREDMETADATA WHERE ZVALUE LIKE '%SHREDTEST%';" 2>/dev/null); then
+      fail "$desc" 'successful ZSTRUCTUREDMETADATA query' "query failed: $db"
+      return
+    fi
     if [ "$n1" -eq 0 ] 2>/dev/null && [ "$n2" -eq 0 ] 2>/dev/null; then
       pass "$desc"
     else

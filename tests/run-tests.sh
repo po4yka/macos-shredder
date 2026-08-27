@@ -11,6 +11,7 @@
 #   F  confirmation       non-interactive real run -> refusal + unchanged data
 #   G  host isolation     sandbox mode -> no defaults/qlmanage execution
 #   H  least privilege    user-home mutations -> owner UID command wrapper
+#   I  symlink refusal     adversarial fixture -> exact expected failures
 #
 # Exit codes: 0 all phases passed; 1 one or more phases failed;
 #             77 shredder.sh not built yet.
@@ -60,6 +61,7 @@ RES_E='FAIL'
 RES_F='FAIL'
 RES_G='FAIL'
 RES_H='FAIL'
+RES_I='FAIL'
 
 phase_a_usage_validation() {
   local sb="$WORK/sandbox-a" log="$WORK/phase-a.log" rc=0 ok=1
@@ -100,20 +102,16 @@ phase_b_list_modules() {
 }
 
 phase_c_force_clean() {
-  local sb="$WORK/sandbox-c" log="$WORK/phase-c.log" rc=0 ok=1 num=''
+  local sb="$WORK/sandbox-c" log="$WORK/phase-c.log" negative="$WORK/phase-c-negative.log"
+  local rc=0 ok=1 num='' qdb
   info "creating artifacts: $sb"
   bash "$CREATE_ARTIFACTS" "$sb" >"$WORK/phase-c-create.log"
+  rm -f -- "$sb/Users/mallory" \
+    "$sb/Users/alice/Library/Application Support/Chromium/Default"
   info 'running: SHREDDER_ROOT=<sandbox> bash shredder.sh --force --debug'
   SHREDDER_ROOT="$sb" bash "$SHREDDER" --force --debug >"$log" 2>&1 || rc=$?
-  case "$rc" in
-    0 | 2)
-      info "exit code: $rc (accepted: 0 or 2 — failed operations allowed)"
-      ;;
-    *)
-      info "exit code: $rc (REJECTED — must not be a usage(64)/fatal(1) code)"
-      ok=0
-      ;;
-  esac
+  info "exit code: $rc (expected 0)"
+  [ "$rc" -eq 0 ] || ok=0
   if grep -q 'Total items cleaned:' "$log"; then
     num=$(sed -n 's/.*Total items cleaned:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$log" | head -n 1)
     if [ -n "$num" ] && [ "$num" -gt 0 ]; then
@@ -126,8 +124,8 @@ phase_c_force_clean() {
     info "summary line 'Total items cleaned:' missing from output"
     ok=0
   fi
-  if grep -q 'Failed operations:' "$log"; then
-    info "summary line 'Failed operations:' present"
+  if grep -q 'Failed operations: 0' "$log"; then
+    info "summary reports zero failed operations"
   else
     info "summary line 'Failed operations:' missing from output"
     ok=0
@@ -138,6 +136,19 @@ phase_c_force_clean() {
   else
     info 'post-clean verification: FAIL'
     ok=0
+  fi
+  if command -v sqlite3 >/dev/null 2>&1; then
+    qdb="$sb/Users/alice/Library/Preferences/com.apple.LaunchServices.QuarantineEventsV2"
+    printf 'not a SQLite database\n' >"$qdb"
+    if bash "$VERIFY_CLEANUP" "$sb" --phase force >"$negative" 2>&1; then
+      info 'corrupt SQLite verification unexpectedly passed'
+      ok=0
+    elif grep -q 'query failed:' "$negative"; then
+      info 'corrupt SQLite verification: correctly failed closed'
+    else
+      info 'corrupt SQLite verification failed for an unexpected reason'
+      ok=0
+    fi
   fi
   [ "$ok" -eq 1 ]
 }
@@ -219,6 +230,18 @@ phase_h_user_owner_commands() {
     && [ ! -s "$sb/Users/alice/.zsh_history" ]
 }
 
+phase_i_symlink_refusal() {
+  local sb="$WORK/sandbox-i" log="$WORK/phase-i.log" rc=0
+  bash "$CREATE_ARTIFACTS" "$sb" >"$WORK/phase-i-create.log"
+  info 'running: adversarial symlinks must be refused with the exact failure count'
+  SHREDDER_ROOT="$sb" bash "$SHREDDER" --force --modules browser >"$log" 2>&1 || rc=$?
+  info "exit code: $rc (expected 2)"
+  [ "$rc" -eq 2 ] \
+    && grep -q 'Failed operations: 11' "$log" \
+    && grep -q 'must survive symlink escape test' "$sb/escape-target/chromium-profile/History" \
+    && grep -q 'must survive linked-home test' "$sb/escape-target/mallory-home/.zsh_history"
+}
+
 preserve_failure_artifacts() {
   local dest="$REPO_ROOT/tests-last-run"
   mkdir -p "$dest"
@@ -258,6 +281,10 @@ info '=== PHASE H: least-privilege user commands ==='
 if phase_h_user_owner_commands; then RES_H='PASS'; fi
 info "PHASE H result: $RES_H"
 
+info '=== PHASE I: symlink refusal ==='
+if phase_i_symlink_refusal; then RES_I='PASS'; fi
+info "PHASE I result: $RES_I"
+
 info '================ SUMMARY ================'
 info "A usage-validation : $RES_A"
 info "B module-listing   : $RES_B"
@@ -267,9 +294,10 @@ info "E sandbox-guard   : $RES_E"
 info "F confirmation    : $RES_F"
 info "G host-isolation  : $RES_G"
 info "H least-privilege : $RES_H"
+info "I symlink-refusal : $RES_I"
 
 overall=0
-for r in "$RES_A" "$RES_B" "$RES_C" "$RES_D" "$RES_E" "$RES_F" "$RES_G" "$RES_H"; do
+for r in "$RES_A" "$RES_B" "$RES_C" "$RES_D" "$RES_E" "$RES_F" "$RES_G" "$RES_H" "$RES_I"; do
   [ "$r" = 'PASS' ] || overall=1
 done
 if [ "$overall" -ne 0 ]; then

@@ -9,7 +9,7 @@ Files:
 
 | Script                 | Role                                                        |
 | ---------------------- | ----------------------------------------------------------- |
-| `run-tests.sh`         | orchestrator — runs phases A–H, reports PASS/FAIL per phase |
+| `run-tests.sh`         | orchestrator — runs phases A–I, reports PASS/FAIL per phase |
 | `create-artifacts.sh`  | builds the deterministic sandbox fixture tree (+ manifest)  |
 | `verify-cleanup.sh`    | asserts post-cleaning state (`force`) or byte-stability (`dryrun`) |
 | `README.md`            | this document                                               |
@@ -95,8 +95,9 @@ Exit codes: `run-tests.sh` → `0` all phases passed, `1` any phase failed,
   - `Volumes/BACKUP/.DS_Store` survives while every in-sandbox `.DS_Store` is
     swept → external-volume pruning proof;
   - quarantine/KnowledgeC marker rows absent → markers really removed;
-  - output contains `Total items cleaned:` with a count > 0 and
-    `Failed operations:` → summary accounting wired.
+  - output contains `Total items cleaned:` with a count > 0 and exactly zero
+    failed operations;
+  - a corrupt SQLite database makes verification fail closed.
 - **D — dry-run byte-stability**: `create-artifacts.sh --manifest` captures a
   sha256 manifest before the run; after `shredder.sh -n -f --debug` the
   manifest must recompute byte-identical with an identical file set → proves
@@ -110,6 +111,8 @@ Exit codes: `run-tests.sh` → `0` all phases passed, `1` any phase failed,
   `qlmanage`; command stubs turn any attempted invocation into a test failure.
 - **H — least-privilege user commands**: user-home mutations must pass through
   the owner-UID command wrapper when the caller UID differs.
+- **I — symlink refusal**: the adversarial user-home symlinks are tested
+  separately and must produce exit `2` with the exact expected failure count.
 
 ## Requirements
 
