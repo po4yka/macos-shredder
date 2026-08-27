@@ -1129,6 +1129,7 @@ module_unified() {
     fi
     if [ "$DRY_RUN" -eq 1 ]; then
         log_debug "[DRY RUN] would erase the unified logging store (log erase --all)"
+        CLEANED_COUNT=$((CLEANED_COUNT + 1))
         return 0
     fi
     if command -v log >/dev/null 2>&1; then
