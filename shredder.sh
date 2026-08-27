@@ -823,6 +823,7 @@ purge_snapshots() {
     fi
     if ! command -v tmutil >/dev/null 2>&1; then
         log_warn "tmutil unavailable; cannot enumerate local snapshots"
+        FAILED_COUNT=$((FAILED_COUNT + 1))
         return 0
     fi
     local snaps snap
@@ -844,6 +845,7 @@ purge_snapshots() {
         else
             if tmutil thinlocalsnapshots / 9999999999999 4 >/dev/null 2>&1; then
                 log_ok "requested aggressive thinning of local snapshots"
+                CLEANED_COUNT=$((CLEANED_COUNT + 1))
             else
                 log_warn "tmutil thinlocalsnapshots failed"
                 FAILED_COUNT=$((FAILED_COUNT + 1))
