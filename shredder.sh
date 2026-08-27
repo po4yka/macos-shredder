@@ -260,9 +260,12 @@ run_target_command() {
         sudo_bin="/usr/bin/sudo"
     fi
     [ -x "$stat_bin" ] && [ -x "$id_bin" ] || return 1
-    owner_uid="$("$stat_bin" -f '%u' "$user_home" 2>/dev/null \
-        || "$stat_bin" -c '%u' "$user_home" 2>/dev/null \
-        || true)"
+    owner_uid="$("$stat_bin" -f '%u' "$user_home" 2>/dev/null || true)"
+    case "$owner_uid" in
+        ''|*[!0-9]*)
+            owner_uid="$("$stat_bin" -c '%u' "$user_home" 2>/dev/null || true)"
+            ;;
+    esac
     case "$owner_uid" in
         ''|*[!0-9]*) return 1 ;;
     esac

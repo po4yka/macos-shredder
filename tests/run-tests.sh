@@ -204,7 +204,8 @@ phase_h_user_owner_commands() {
   local log="$WORK/phase-h.log" rc=0
   bash "$CREATE_ARTIFACTS" "$sb" >"$WORK/phase-h-create.log"
   mkdir -p "$bin"
-  printf '#!/bin/sh\nprintf "4242\\n"\n' >"$bin/stat"
+  # shellcheck disable=SC2016 # $1 expands when the generated stub runs
+  printf '#!/bin/sh\ncase "$1" in\n  -f) printf "?\\n" ;;\n  -c) printf "4242\\n" ;;\nesac\n' >"$bin/stat"
   printf '#!/bin/sh\nprintf "999\\n"\n' >"$bin/id"
   # shellcheck disable=SC2016 # variables expand when the generated stub runs
   printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "$SHREDDER_TARGET_COMMAND_LOG"\nshift 3\nexec "$@"\n' >"$bin/sudo"
