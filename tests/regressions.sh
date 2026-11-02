@@ -359,7 +359,7 @@ test_process_checks_ignore_own_run() (
 #!/bin/sh
 own='/bin/bash ./shredder.sh --modules terminal --terminal-log-file /Users/a/Terminal/x.log'
 case "$*" in
-    *'-axo pid=,ppid=,uid=,command='*)
+    *'-o uid= -o command='*)
         printf '%s 1 0 %s\n4243 %s 0 %s\n7 1 501 /usr/sbin/cfprefsd agent\n' \
             "$SHREDDER_TEST_SELF" "$own" "$SHREDDER_TEST_SELF" "$own" ;;
     *'-axo command='*) printf '%s\n/usr/sbin/cfprefsd agent\n' "$own" ;;
@@ -383,7 +383,7 @@ test_process_checks_scope_owner() (
     cat > "$bin/ps" <<'STUB'
 #!/bin/sh
 case "$*" in
-    *'-axo pid=,ppid=,uid=,command='*)
+    *'-o uid= -o command='*)
         printf '11 1 501 /System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal\n'
         printf '12 1 501 /System/Library/CoreServices/Finder.app/Contents/MacOS/Finder\n' ;;
     *'-o ppid= -p'*) printf '1\n' ;;
@@ -645,7 +645,7 @@ test_process_match_without_sigpipe() (
     cat > "$bin/ps" <<'STUB'
 #!/bin/sh
 case "$*" in
-    *'-axo pid=,ppid=,uid=,command='*)
+    *'-o uid= -o command='*)
         printf '10 1 501 /Applications/Maccy.app/Contents/MacOS/Maccy\n'
         i=0; while [ "$i" -lt 4000 ]; do
             printf '%s 1 501 /usr/libexec/filler-process-with-a-long-command-line-%s\n' "$((i + 100))" "$i"
@@ -722,3 +722,33 @@ test_process_match_fails_closed() (
 )
 test_process_match_fails_closed
 printf 'PASS: process matching fails closed on grep errors\n'
+
+test_process_list_wrappers_and_root() (
+    setup_case process-wrapper
+    local bin="$WORK/process-wrapper-bin"
+    mkdir -p "$bin"
+    # zsh -c 'sudo ./shredder.sh ...' names a Terminal folder in its arguments.
+    cat > "$bin/ps" <<'STUB'
+#!/bin/sh
+wrapper='zsh -c sudo ./shredder.sh --modules terminal --terminal-log-file /Users/a/Terminal/x.log'
+case "$*" in
+    *'-o uid= -o command='*)
+        printf '50 1 501 %s\n' "$wrapper"
+        printf '60 1 0 /usr/libexec/system-writer\n'
+        printf '70 1 502 /usr/libexec/other-user-writer\n' ;;
+    *'-o ppid= -p 50'*) printf '1\n' ;;
+    *'-o ppid= -p'*) printf '50\n' ;;
+    *'-o comm= -p 50'*) printf 'zsh\n' ;;
+    *'-o command= -p 50'*) printf '%s\n' "$wrapper" ;;
+esac
+STUB
+    chmod +x "$bin/ps"
+    PATH="$bin:$PATH"
+    TEST_MODE=0
+    terminal_clients_stopped 501
+    # Root daemons stay visible to per-account checks; other accounts do not.
+    process_list command 501 | grep -q system-writer
+    if process_list command 501 | grep -q other-user-writer; then return 1; fi
+)
+test_process_list_wrappers_and_root
+printf 'PASS: process lists skip wrapper shells and keep root writers\n'

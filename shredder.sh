@@ -767,21 +767,33 @@ run_as_user() {
 
 # process_list FIELD [UID] - print the process table as command lines
 # (FIELD=command) or executable paths (FIELD=comm). Omit this run, its
-# subshells and the sudo/shell processes that started it: their arguments can
-# name modules and paths that look like client processes. With a non-root UID,
-# keep only that account's processes; an empty UID or UID 0 keeps every account.
+# subshells and the processes that started it: sudo, plain shells, and any
+# wrapper whose command line names this script. Their arguments can name
+# modules and paths that look like client processes. With a non-root UID,
+# drop other accounts' processes but keep root's: system daemons can also
+# write per-account stores. An empty UID or UID 0 keeps every account.
 process_list() {
-    local field="$1" uid="${2:-}" pid comm exclude=" "
+    local field="$1" uid="${2:-}" pid comm command exclude=" " script="${BASH_SOURCE[0]##*/}"
     case "$field" in command|comm) ;; *) return 1 ;; esac
     pid="$(ps -o ppid= -p "$$" 2>/dev/null | tr -d '[:space:]')" || pid=""
     while :; do
         case "$pid" in ''|*[!0-9]*) break ;; esac
         [ "$pid" -gt 1 ] || break
         comm="$(ps -o comm= -p "$pid" 2>/dev/null)" || break
-        case "${comm##*/}" in bash|sh|sudo) exclude="$exclude$pid " ;; *) break ;; esac
+        command="$(ps -o command= -p "$pid" 2>/dev/null)" || command=""
+        case "${comm##*/}" in
+            bash|sh|sudo) exclude="$exclude$pid " ;;
+            *)
+                case "$command" in
+                    *"$script"*) exclude="$exclude$pid " ;;
+                    *) break ;;
+                esac
+                ;;
+        esac
         pid="$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d '[:space:]')" || break
     done
-    ps -axo "pid=,ppid=,uid=,$field=" 2>/dev/null \
+    # One -o option per column: POSIX ps reads the rest of "pid=,..." as a header.
+    ps -ax -o pid= -o ppid= -o uid= -o "$field=" 2>/dev/null \
         | SHREDDER_PS_EXCLUDE="$exclude" SHREDDER_PS_UID="$uid" SHREDDER_PS_SELF="$$" awk '
             BEGIN {
                 ex = ENVIRON["SHREDDER_PS_EXCLUDE"]
@@ -809,7 +821,7 @@ process_list() {
                             q = ppid[q]; hops++
                         }
                         if (mine) continue
-                        if (u != "" && u != "0" && owner[i] != u) continue
+                        if (u != "" && u != "0" && owner[i] != u && owner[i] != "0") continue
                     }
                     print text[i]
                 }
