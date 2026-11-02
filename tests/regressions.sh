@@ -223,3 +223,66 @@ test_trash_links() (
 )
 test_trash_links
 printf 'PASS: Trash links are unlinked; targets and linked parents are protected\n'
+
+test_logfile_safety() (
+    setup_case logfile-safety
+    local logfile="$SANDBOX/operations.log" rc=0 mode
+    /bin/bash "$SHREDDER" --dry-run --modules shell --logfile "$logfile" >/dev/null 2>&1
+    [ ! -e "$logfile" ]
+    /bin/bash "$SHREDDER" --list --logfile "$logfile" >/dev/null 2>&1
+    [ ! -e "$logfile" ]
+    /bin/bash "$SHREDDER" --modules shell --logfile "$logfile" </dev/null >/dev/null 2>&1 || rc=$?
+    [ "$rc" -eq 1 ]
+    [ ! -e "$logfile" ]
+    /bin/bash "$SHREDDER" --force --modules shell --logfile "$logfile" >/dev/null 2>&1
+    grep -q 'logging started' "$logfile"
+    mode="$(stat -f '%Lp' "$logfile" 2>/dev/null)" || mode="$(stat -c '%a' "$logfile")"
+    [ "$mode" = 600 ]
+    cp "$logfile" "$WORK/log-before"
+    rc=0
+    /bin/bash "$SHREDDER" --force --modules shell --logfile "$logfile" >/dev/null 2>&1 || rc=$?
+    [ "$rc" -eq 1 ]
+    cmp -s "$WORK/log-before" "$logfile"
+    printf 'outside sentinel\n' > "$WORK/outside-log"
+    ln -s "$WORK/outside-log" "$SANDBOX/link.log"
+    rc=0
+    /bin/bash "$SHREDDER" --force --modules shell --logfile "$SANDBOX/link.log" >/dev/null 2>&1 || rc=$?
+    [ "$rc" -eq 1 ]
+    grep -q '^outside sentinel$' "$WORK/outside-log"
+    ln -s "$WORK/nonexistent-log" "$SANDBOX/dangling.log"
+    rc=0
+    /bin/bash "$SHREDDER" --force --modules shell --logfile "$SANDBOX/dangling.log" >/dev/null 2>&1 || rc=$?
+    [ "$rc" -eq 1 ]
+    [ ! -e "$WORK/nonexistent-log" ]
+    mkdir "$SANDBOX/open" "$WORK/log-outside-dir"
+    chmod 777 "$SANDBOX/open"
+    ln -s "$WORK/log-outside-dir" "$SANDBOX/linked-parent"
+    for logfile in "$SANDBOX/open/new.log" "$SANDBOX/linked-parent/new.log" "$WORK/outside-new.log"; do
+        rc=0
+        /bin/bash "$SHREDDER" --force --modules shell --logfile "$logfile" >/dev/null 2>&1 || rc=$?
+        [ "$rc" -eq 1 ]
+        [ ! -e "$logfile" ]
+    done
+    if [ "$(uname -s)" = Darwin ]; then
+        mkdir "$SANDBOX/acl-parent"
+        chmod +a 'everyone allow add_file' "$SANDBOX/acl-parent"
+        rc=0
+        /bin/bash "$SHREDDER" --force --modules shell --logfile "$SANDBOX/acl-parent/new.log" >/dev/null 2>&1 || rc=$?
+        [ "$rc" -eq 1 ]
+        [ ! -e "$SANDBOX/acl-parent/new.log" ]
+        chmod -N "$SANDBOX/acl-parent"
+    fi
+    # Inject a leaf replacement after the path check, during parent stat.
+    LOGFILE_ARG="$SANDBOX/raced.log"
+    # shellcheck disable=SC2329 # invoked by setup_logging
+    stat() {
+        [ -L "$SANDBOX/raced.log" ] || ln -s "$WORK/outside-log" "$SANDBOX/raced.log"
+        command stat "$@"
+    }
+    rc=0
+    (setup_logging) > "$WORK/raced-log-output" 2>&1 || rc=$?
+    [ "$rc" -eq 1 ]
+    grep -q '^outside sentinel$' "$WORK/outside-log"
+)
+test_logfile_safety
+printf 'PASS: logs are private, new, contained, and created only after confirmation\n'

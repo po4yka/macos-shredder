@@ -38,6 +38,12 @@ sudo ./shredder.sh --modules shell,browser,trash --force
 Without `--modules`, the script runs every module. Without `--force`, a real
 run asks for confirmation.
 
+`--logfile FILE` creates a new log with mode `0600` after confirmation. Existing
+files and symlink paths are refused. The parent directory must belong to the
+caller and must not allow group or other users to write or have a macOS ACL.
+With `sudo`, use a root-owned directory, such as `/var/log`.
+Dry-run and `--list` do not create logs.
+
 ## Modules
 
 | Module | Scope |

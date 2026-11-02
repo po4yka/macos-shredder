@@ -643,7 +643,7 @@ Options:
   -m, --modules IDS     Comma-separated module ids to run (default: all).
                         See '--list' for valid ids; unknown ids are rejected.
   -f, --force           Do not ask for confirmation (auto-answer yes)
-      --logfile FILE    Append a timestamped operation log to FILE
+      --logfile FILE    Create a new private operation log after confirmation
       --include-volumes Also process mounted volumes under /Volumes
       --purge-snapshots Delete APFS Time Machine local snapshots before modules
 
@@ -792,12 +792,71 @@ parse_args() {
 
 setup_logging() {
     [ -n "$LOGFILE_ARG" ] || return 0
-    LOGFILE="$LOGFILE_ARG"
-    if ! : >> "$LOGFILE" 2>/dev/null; then
-        printf '%b\n' "${COLOR_RED}[x]${COLOR_RESET} cannot write logfile: $LOGFILE" >&2
-        exit 1
+    if [ "$DRY_RUN" -eq 1 ]; then
+        log_debug "[DRY RUN] logfile creation skipped: $LOGFILE_ARG"
+        return 0
     fi
-    exec 3>> "$LOGFILE"
+    local target="$LOGFILE_ARG" part parent cursor previous_dir details owner mode
+    local old_umask had_noclobber=0 parts=() kernel acl
+    case "$target" in
+        *$'\n'*) die "logfile paths cannot contain newlines" ;;
+        /*) ;;
+        *) target="$(pwd -P)/$target" ;;
+    esac
+    IFS='/' read -r -a parts <<< "$target"
+    target=""
+    for part in "${parts[@]}"; do
+        case "$part" in
+            ''|.) continue ;;
+            ..) die "logfile paths cannot contain '..'" ;;
+        esac
+        target="$target/$part"
+    done
+    # These are standard, root-controlled macOS aliases. Other symlinks are refused.
+    kernel="$(uname -s)"
+    if [ "$kernel" = Darwin ]; then
+        case "$target" in /var/*|/tmp/*|/etc/*) target="/private$target" ;; esac
+    fi
+    [ -n "$target" ] || die "logfile must name a new file"
+    guard_mutation_target "$target" || die "unsafe logfile path: $target"
+    [ ! -e "$target" ] && [ ! -L "$target" ] || die "logfile already exists: $target"
+    parent="${target%/*}"
+    parent="${parent:-/}"
+    cursor="$parent"
+    while [ "$cursor" != / ]; do
+        [ ! -L "$cursor" ] || die "logfile parent is a symlink: $cursor"
+        cursor="${cursor%/*}"
+        cursor="${cursor:-/}"
+    done
+    previous_dir="$(pwd -P)"
+    cd -P "$parent" || die "cannot open logfile parent: $parent"
+    [ "$(pwd -P)" = "$parent" ] || die "logfile parent changed: $parent"
+    # Check the pinned directory, not the pathname. An unprivileged process
+    # must not be able to replace the leaf between validation and opening.
+    details="$(stat -f '%u %Lp' . 2>/dev/null)" \
+        || details="$(stat -c '%u %a' . 2>/dev/null)" \
+        || die "cannot inspect logfile parent: $parent"
+    read -r owner mode <<< "$details"
+    case "$mode" in ''|*[!0-7]*) die "invalid logfile parent permissions" ;; esac
+    if [ "$owner" != "$(id -u)" ] || [ "$((8#$mode & 022))" -ne 0 ]; then
+        die "logfile parent must belong to the caller and forbid group/other writes: $parent"
+    fi
+    if [ "$kernel" = Darwin ]; then
+        # macOS ACL grants are independent of the POSIX mode bits.
+        acl="$(/bin/ls -lde .)" || die "cannot inspect logfile parent ACL"
+        case "$acl" in *$'\n'*) die "logfile parent must not have an extended ACL: $parent" ;; esac
+    fi
+    old_umask="$(umask)"
+    case "$-" in *C*) had_noclobber=1 ;; esac
+    umask 077
+    set -C
+    if ! { exec 3> "./${target##*/}"; } 2>/dev/null; then
+        die "cannot create new logfile: $target"
+    fi
+    [ "$had_noclobber" -eq 1 ] || set +C
+    umask "$old_umask"
+    cd "$previous_dir" || die "cannot restore working directory"
+    LOGFILE="$target"
     log_message "INFO" "logging started ($SCRIPT_NAME v$VERSION)"
 }
 
@@ -1619,7 +1678,6 @@ main() {
     setup_colors
     trap on_interrupt INT
     parse_args "$@"
-    setup_logging
 
     if [ "$LIST_ONLY" -eq 1 ]; then
         printf '%b\n' "Available modules:"
@@ -1644,6 +1702,8 @@ main() {
             die "aborted by user"
         fi
     fi
+
+    setup_logging
 
     if [ "$PURGE_SNAPSHOTS" -eq 1 ]; then
         log_info "purging local APFS snapshots (--purge-snapshots)"

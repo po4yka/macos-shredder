@@ -10,6 +10,7 @@ Files:
 | Script                 | Role                                                        |
 | ---------------------- | ----------------------------------------------------------- |
 | `run-tests.sh`         | orchestrator — runs phases A–O, reports PASS/FAIL per phase |
+| `regressions.sh`       | additional cleanup, status, and logfile safety checks |
 | `create-artifacts.sh`  | builds the deterministic sandbox fixture tree (+ manifest)  |
 | `verify-cleanup.sh`    | asserts post-cleaning state (`force`) or byte-stability (`dryrun`) |
 | `README.md`            | this document                                               |
@@ -135,11 +136,18 @@ Exit codes: `run-tests.sh` → `0` all phases passed, `1` any phase failed,
 
 ## Requirements
 
+After phases A–O, the suite runs `regressions.sh`. It checks failed directory
+traversal, snapshot listing errors, Wi-Fi stores, zsh sessions, log rotations,
+macOS browser cache paths, SQLite sidecars, Firefox sessions, active-browser
+status, Trash symlinks, and safe logfile creation. These checks use temporary
+files; host snapshot and browser states are simulated at the function boundary.
+
 - bash 3.2+ (no bash-4-only features used)
 - POSIX-ish userland: `find sort sed awk grep wc stat cp mv rm mkdir` — BSD or
   GNU variants both work (file sizes via `stat -c%s` with `stat -f%z`
   fallback)
 - `shasum` **or** `sha256sum` for manifests/hashes
+- `gzip` and `cmp` for compressed-log and file-preservation checks
 - `sqlite3`: required for real Firefox Places fixtures, bookmark preservation,
   transaction rollback, and database integrity checks
 - no root privileges anywhere
