@@ -974,6 +974,7 @@ module_shell() {
 .rsync_history
 SHELL_HISTORIES
         clear_dir_contents "$h/.bash_sessions"
+        clear_dir_contents "$h/.zsh_sessions"
         remove_sqlite_db "$h/.ipython/profile_default/history.sqlite"
         truncate_file "$h/.julia/logs/repl_history.jl"
         truncate_file "$h/.ghc/ghci_history"

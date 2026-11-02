@@ -77,3 +77,21 @@ test_wifi_store() (
 )
 test_wifi_store
 printf 'PASS: current Wi-Fi store is removed only in a real run\n'
+
+test_zsh_sessions() (
+    setup_case zsh-sessions
+    local sessions="$USERS_DIR/User Space/.zsh_sessions" name
+    mkdir -p "$sessions"
+    for name in session.history session.historynew session.session; do
+        printf 'session trace\n' > "$sessions/$name"
+    done
+    /bin/bash "$SHREDDER" --dry-run --modules shell >/dev/null 2>&1
+    for name in session.history session.historynew session.session; do
+        grep -q '^session trace$' "$sessions/$name"
+    done
+    /bin/bash "$SHREDDER" --force --modules shell >/dev/null 2>&1
+    [ -d "$sessions" ]
+    [ -z "$(find "$sessions" -type f -print)" ]
+)
+test_zsh_sessions
+printf 'PASS: zsh session histories are cleared\n'
