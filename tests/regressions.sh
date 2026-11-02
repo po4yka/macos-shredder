@@ -349,3 +349,28 @@ test_volume_parent_race() (
 )
 test_volume_parent_race
 printf 'PASS: a replaced volume parent cannot redirect deletion\n'
+
+test_process_checks_ignore_own_run() (
+    setup_case own-process
+    local bin="$WORK/own-process-bin"
+    mkdir -p "$bin"
+    # The run's own arguments name the terminal module and a Terminal folder.
+    cat > "$bin/ps" <<'STUB'
+#!/bin/sh
+own='/bin/bash ./shredder.sh --modules terminal --terminal-log-file /Users/a/Terminal/x.log'
+case "$*" in
+    *'-axo pid=,ppid=,uid=,command='*)
+        printf '%s 1 0 %s\n4243 %s 0 %s\n7 1 501 /usr/sbin/cfprefsd agent\n' \
+            "$SHREDDER_TEST_SELF" "$own" "$SHREDDER_TEST_SELF" "$own" ;;
+    *'-axo command='*) printf '%s\n/usr/sbin/cfprefsd agent\n' "$own" ;;
+    *'-o ppid= -p'*) printf '1\n' ;;
+esac
+STUB
+    chmod +x "$bin/ps"
+    PATH="$bin:$PATH"
+    export SHREDDER_TEST_SELF="$$"
+    TEST_MODE=0
+    terminal_clients_stopped
+)
+test_process_checks_ignore_own_run
+printf 'PASS: process checks ignore the run'"'"'s own command line\n'

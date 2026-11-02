@@ -733,6 +733,57 @@ run_as_user() {
     return 1
 }
 
+# process_list FIELD [UID] - print the process table as command lines
+# (FIELD=command) or executable paths (FIELD=comm). Omit this run, its
+# subshells and the sudo/shell processes that started it: their arguments can
+# name modules and paths that look like client processes. With a non-root UID,
+# keep only that account's processes; an empty UID or UID 0 keeps every account.
+process_list() {
+    local field="$1" uid="${2:-}" pid comm exclude=" "
+    case "$field" in command|comm) ;; *) return 1 ;; esac
+    pid="$(ps -o ppid= -p "$$" 2>/dev/null | tr -d '[:space:]')" || pid=""
+    while :; do
+        case "$pid" in ''|*[!0-9]*) break ;; esac
+        [ "$pid" -gt 1 ] || break
+        comm="$(ps -o comm= -p "$pid" 2>/dev/null)" || break
+        case "${comm##*/}" in bash|sh|sudo) exclude="$exclude$pid " ;; *) break ;; esac
+        pid="$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d '[:space:]')" || break
+    done
+    ps -axo "pid=,ppid=,uid=,$field=" 2>/dev/null \
+        | SHREDDER_PS_EXCLUDE="$exclude" SHREDDER_PS_UID="$uid" SHREDDER_PS_SELF="$$" awk '
+            BEGIN {
+                ex = ENVIRON["SHREDDER_PS_EXCLUDE"]
+                u = ENVIRON["SHREDDER_PS_UID"]
+                self = ENVIRON["SHREDDER_PS_SELF"]
+            }
+            {
+                n++
+                if ($1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ && $3 ~ /^[0-9]+$/) {
+                    pid[n] = $1; ppid[$1] = $2; owner[n] = $3; line = $0
+                    sub(/^[ \t]*[0-9]+[ \t]+[0-9]+[ \t]+[0-9]+[ \t]*/, "", line)
+                    text[n] = line
+                } else {
+                    pid[n] = ""; owner[n] = ""; text[n] = $0
+                }
+            }
+            END {
+                for (i = 1; i <= n; i++) {
+                    p = pid[i]
+                    if (p != "") {
+                        if (index(ex, " " p " ")) continue
+                        mine = 0; q = p; hops = 0
+                        while (q != "" && q + 0 > 1 && hops < 256) {
+                            if (q == self) { mine = 1; break }
+                            q = ppid[q]; hops++
+                        }
+                        if (mine) continue
+                        if (u != "" && u != "0" && owner[i] != u) continue
+                    }
+                    print text[i]
+                }
+            }'
+}
+
 # A failed process query blocks browser mutations just like a running browser.
 browser_running() {
     local proc="$1" rc=0
@@ -1229,7 +1280,7 @@ purge_snapshots() {
 clipboard_maccy_stopped() {
     [ "$TEST_MODE" -eq 0 ] || return 0
     local processes
-    processes="$(ps -axo command= 2>/dev/null)" || return 1
+    processes="$(process_list command)" || return 1
     if printf '%s\n' "$processes" | grep -Ei '(^|[ /])Maccy([[:space:]/]|$|\.app/)' >/dev/null; then
         return 1
     fi
@@ -1483,7 +1534,7 @@ shell_clean_atuin() {
 shell_stores_stopped() {
     [ "$TEST_MODE" -eq 0 ] || return 0
     local processes
-    processes="$(ps -axo command= 2>/dev/null)" || return 1
+    processes="$(process_list command)" || return 1
     # Bash/zsh can run this script. They cannot be closed from here; their
     # in-memory history can be written back and is documented separately.
     if printf '%s\n' "$processes" | grep -Ei '(^|[ /])(atuin|nu|xonsh|fish|ipython)([[:space:]/]|$|\.(py|exe)([[:space:]]|$))' >/dev/null; then
@@ -1495,7 +1546,7 @@ shell_stores_stopped() {
 terminal_sessions_stopped() {
     [ "$TEST_MODE" -eq 0 ] || return 0
     local processes
-    processes="$(ps -axo command= 2>/dev/null)" || return 1
+    processes="$(process_list command)" || return 1
     # Include the app executable, CLI and helper processes. A failed process
     # query also blocks cleanup; --force must not bypass this check.
     if printf '%s\n' "$processes" | grep -Ei '(^|[ /])(cmux|cmuxterm)([[:space:]/.-]|$)' >/dev/null; then
@@ -2562,7 +2613,7 @@ module_wifi() {
 headless_stopped() {
     [ "$TEST_MODE" -eq 0 ] || return 0
     local processes
-    if ! processes="$(ps -axo command= 2>/dev/null)"; then
+    if ! processes="$(process_list command)"; then
         log_warn "headless: cannot inspect browser processes; cleanup refused"
         return 1
     fi
@@ -2652,7 +2703,7 @@ module_apps() {
 editors_stopped() {
     [ "$TEST_MODE" -eq 0 ] || return 0
     local processes
-    if ! processes="$(ps -axo command= 2>/dev/null)"; then
+    if ! processes="$(process_list command)"; then
         log_warn "editors: cannot inspect running processes; cleanup refused"
         return 1
     fi
@@ -2774,7 +2825,7 @@ ai_environment_roots() {
 ai_agents_stopped() {
     [ "$TEST_MODE" -eq 0 ] || return 0
     local processes
-    if ! processes="$(ps -axo command= 2>/dev/null)"; then
+    if ! processes="$(process_list command)"; then
         log_warn "ai: cannot inspect running processes; cleanup refused"
         return 1
     fi
@@ -3294,7 +3345,7 @@ ai_claude_temp() {
 ai_extended_stopped() {
     [ "$TEST_MODE" -eq 0 ] || return 0
     local processes
-    if ! processes="$(ps -axo command= 2>/dev/null)"; then
+    if ! processes="$(process_list command)"; then
         log_warn "ai: cannot inspect extended clients; cleanup refused"
         return 1
     fi
@@ -3583,7 +3634,7 @@ add_slack_export_root() {
 slack_exporters_stopped() {
     [ "$TEST_MODE" -eq 0 ] || return 0
     local processes
-    processes="$(ps -axo command= 2>/dev/null)" || return 1
+    processes="$(process_list command)" || return 1
     if printf '%s\n' "$processes" | grep -Ei '^[[:space:]]*([^[:space:]]*/)?(slackdump([^[:space:]/]*)?|slack[-_](export|sync)[^[:space:]/]*)([[:space:]]|$)|^[[:space:]]*([^[:space:]]*/)?(bash|sh|zsh|python[0-9.]*|node|ruby|perl)([[:space:]]+-[^[:space:]]+)*[[:space:]]+[^[:space:]]*(slack[-_](export|sync)|slack[_-]dump/[^[:space:]]*(sync|export))[^[:space:]]*([[:space:]]|$)' >/dev/null; then
         return 1
     fi
@@ -3853,7 +3904,7 @@ selected_artifact_safe() {
 selected_artifact_idle() {
     local target="$1" pattern="$2" processes result rc=0
     [ "$TEST_MODE" -eq 0 ] || return 0
-    processes="$(ps -axo comm= 2>/dev/null)" || return 1
+    processes="$(process_list comm)" || return 1
     if printf '%s\n' "$processes" | grep -Ei "$pattern" >/dev/null; then return 1; fi
     command -v lsof >/dev/null 2>&1 || return 1
     if [ -d "$target" ]; then
@@ -4023,7 +4074,7 @@ add_terminal_log_file() {
 terminal_clients_stopped() {
     [ "$TEST_MODE" -eq 0 ] || return 0
     local processes
-    processes="$(ps -axo command= 2>/dev/null)" || return 1
+    processes="$(process_list command)" || return 1
     if printf '%s\n' "$processes" | grep -Ei '(^|[ /])(Terminal|iTerm2?|iTermServer[^ /]*)([[:space:]/]|$)' >/dev/null; then
         return 1
     fi
@@ -4084,7 +4135,7 @@ module_terminal() {
 finder_history_clients_stopped() {
     [ "$TEST_MODE" -eq 0 ] || return 0
     local processes
-    processes="$(ps -axo command= 2>/dev/null)" || return 1
+    processes="$(process_list command)" || return 1
     if printf '%s\n' "$processes" | grep -E '(^|[ /])(Finder|com\.apple\.appkit\.xpc\.openAndSavePanelService)([[:space:]/]|$)' >/dev/null; then
         return 1
     fi
@@ -4472,7 +4523,7 @@ activity_store_idle() {
         knowledge) pattern='(knowledge-agent|knowledgeconstructiond|coreduetd|duetexpertd)' ;;
         *) pattern='(intelligenceplatformd|knowledgeconstructiond|intelligencetasksd|BiomeAgent|biomed)' ;;
     esac
-    processes="$(ps -axo comm= 2>/dev/null)" || return 1
+    processes="$(process_list comm)" || return 1
     if printf '%s\n' "$processes" | grep -E "(^|/)${pattern}$" >/dev/null; then return 1; fi
     for suffix in '' -wal -shm -journal; do
         [ -e "$db$suffix" ] || continue
