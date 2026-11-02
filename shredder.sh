@@ -4372,7 +4372,12 @@ finder_history_plist() {
         keys=""
         for spec in $specs; do
             key=${spec%:*}; expected=${spec#*:}
-            actual=$(/usr/bin/plutil -type "$key" "$file" 2>/dev/null) || continue
+            # Only a missing key is skipped. Any other plutil error, such as a
+            # release without -type, stops instead of looking like "absent".
+            if ! actual=$(/usr/bin/plutil -type "$key" "$file" 2>&1); then
+                case "$actual" in *"No value at that key path"*) continue ;; esac
+                exit 1
+            fi
             [ "$actual" = "$expected" ] || exit 1
             keys="$keys $key"
         done
