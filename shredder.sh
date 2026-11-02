@@ -1024,8 +1024,182 @@ purge_snapshots() {
 ###############################################################################
 
 # --- module: shell -----------------------------------------------------------
+# Clear only known shell-history tables. Atuin's record store also contains
+# aliases, scripts and KV entries, so it must never be removed as a whole.
+# ai_sqlite_command supplies the common owner-UID, physical-parent and link checks.
+shell_purge_database() {
+    local db="$1" flavor="$2" mode="${3:-clean}" tables table deletes keeps anchor
+    local sqlite_bin sql allowed="" version count=0 condition suffix
+    guard_mutation_target "$db" || return 1
+    if [ ! -e "$db" ]; then
+        for suffix in -wal -shm -journal; do
+            if [ -e "$db$suffix" ] || [ -L "$db$suffix" ]; then
+                log_warn "shell: orphan database sidecar retained: $db$suffix"
+                return 1
+            fi
+        done
+        return 0
+    fi
+    if [ "$DRY_RUN" -eq 1 ]; then
+        [ "$mode" != clean ] || CLEANED_COUNT=$((CLEANED_COUNT + 1))
+        log_debug "[DRY RUN] would clear known shell history (schema checked on real run): $db"
+        return 0
+    fi
+    case "$flavor" in
+        atuin) anchor=history; deletes='history events'; keeps=_sqlx_migrations ;;
+        atuin-records) anchor='store records'; deletes='store records'; keeps=_sqlx_migrations ;;
+        nushell) anchor=history; deletes=history; keeps=sqlite_sequence ;;
+        xonsh) anchor=xonsh_history; deletes=xonsh_history; keeps=sqlite_sequence ;;
+        histdb) anchor=history; deletes='history commands places'; keeps=sqlite_sequence ;;
+        *) return 1 ;;
+    esac
+    sqlite_bin="$(command -v sqlite3 2>/dev/null || true)"
+    [ -n "$sqlite_bin" ] || { log_warn "shell: sqlite3 required; database retained: $db"; return 1; }
+    tables="$(ai_sqlite_command "$db" "$sqlite_bin" "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;" 2>/dev/null)" || return 1
+    for table in $anchor; do
+        case $'\n'"$tables"$'\n' in *$'\n'"$table"$'\n'*) count=$((count + 1)) ;; esac
+    done
+    [ "$count" -gt 0 ] || return 1
+    while IFS= read -r table; do
+        case " $deletes $keeps " in *" $table "*) ;; *) return 1 ;; esac
+    done <<< "$tables"
+    for table in $deletes $keeps; do allowed="${allowed:+$allowed,}'$table'"; done
+    version="$(ai_sqlite_command "$db" "$sqlite_bin" 'PRAGMA schema_version;' 2>/dev/null)" || return 1
+    case "$version" in ''|*[!0-9]*) return 1 ;; esac
+    sql="PRAGMA trusted_schema=OFF;
+PRAGMA foreign_keys=OFF;
+PRAGMA secure_delete=ON;
+BEGIN IMMEDIATE;
+CREATE TEMP TABLE shredder_check(ok INTEGER CHECK(ok=1));
+INSERT INTO shredder_check SELECT schema_version=$version FROM pragma_schema_version;
+INSERT INTO shredder_check SELECT COUNT(*)=0 FROM sqlite_master WHERE type='trigger' OR (type='table' AND name NOT IN ($allowed));"
+    for table in $deletes; do
+        case $'\n'"$tables"$'\n' in *$'\n'"$table"$'\n'*) ;; *) continue ;; esac
+        condition=1
+        if [ "$flavor" = atuin-records ]; then
+            # Version 001 packfile manifests are plaintext JSON with a three-byte
+            # prefix. Other tags can contain user configuration and stay intact.
+            sql="$sql
+INSERT INTO shredder_check SELECT COUNT(*)=0 FROM \"$table\"
+ WHERE tag='packfile' AND CASE
+ WHEN substr(CAST(data AS TEXT),1,3)='001' AND json_valid(substr(CAST(data AS TEXT),4))
+ THEN COALESCE(json_type(substr(CAST(data AS TEXT),4),'$.tag')!='text',1)
+ ELSE 1 END;"
+            condition="tag='history' OR CASE WHEN tag='packfile' THEN json_extract(substr(CAST(data AS TEXT),4),'$.tag')='history' ELSE 0 END"
+        fi
+        if [ "$mode" = clean ]; then
+            sql="$sql
+DELETE FROM \"$table\" WHERE $condition;"
+        fi
+    done
+    if [ "$mode" = clean ]; then
+        sql="$sql
+DROP TABLE shredder_check;
+COMMIT;
+VACUUM;
+PRAGMA wal_checkpoint(TRUNCATE);"
+    else
+        sql="$sql
+ROLLBACK;"
+    fi
+    local result
+    result="$(ai_sqlite_command "$db" "$sqlite_bin" "$sql" 2>/dev/null)" || return 1
+    if [ "$mode" = clean ]; then
+        result="${result##*$'\n'}"
+        case "$result" in 0\|*) ;; *) return 1 ;; esac
+        CLEANED_COUNT=$((CLEANED_COUNT + 1))
+        log_debug "cleared shell history; configuration preserved: $db"
+    fi
+    return 0
+}
+
+shell_clean_database() {
+    if ! shell_purge_database "$@"; then
+        log_warn "shell: unsafe, unsupported or unavailable history database retained: $1"
+        [ "$DRY_RUN" -eq 1 ] || FAILED_COUNT=$((FAILED_COUNT + 1))
+    fi
+}
+
+shell_clean_atuin() {
+    local root="$1" failed=0
+    # Check both files before deleting either representation of the history.
+    shell_purge_database "$root/history.db" atuin check || failed=1
+    shell_purge_database "$root/records.db" atuin-records check || failed=1
+    if [ "$failed" -eq 1 ]; then
+        log_warn "shell: Atuin history retained because a database could not be checked: $root"
+        [ "$DRY_RUN" -eq 1 ] || FAILED_COUNT=$((FAILED_COUNT + 1))
+        return 0
+    fi
+    shell_clean_database "$root/records.db" atuin-records
+    shell_clean_database "$root/history.db" atuin
+}
+
+shell_stores_stopped() {
+    [ "$TEST_MODE" -eq 0 ] || return 0
+    local processes
+    processes="$(ps -axo command= 2>/dev/null)" || return 1
+    # Bash/zsh can run this script. They cannot be closed from here; their
+    # in-memory history can be written back and is documented separately.
+    if printf '%s\n' "$processes" | grep -Ei '(^|[ /])(atuin|nu|xonsh|fish|ipython)([[:space:]/]|$|\.(py|exe)([[:space:]]|$))' >/dev/null; then
+        return 1
+    fi
+    return 0
+}
+
+shell_remove_history_file() {
+    if [ -e "$1" ] && [ ! -f "$1" ] && [ ! -L "$1" ]; then
+        log_warn "shell: expected a history file, retaining: $1"
+        [ "$DRY_RUN" -eq 1 ] || FAILED_COUNT=$((FAILED_COUNT + 1))
+        return 0
+    fi
+    remove_path "$1"
+}
+
+shell_clean_alternative_stores() {
+    local h="$1" root entry
+    shell_clean_atuin "$h/.local/share/atuin"
+    shell_clean_atuin "$h/.atuin/data"
+    for root in "$h/.local/share/fish" "$h/.config/fish"; do
+        guard_mutation_target "$root" || continue
+        while read_find_path entry; do
+            remove_path "$entry"
+        done < <(find_checked "$root" -maxdepth 1 \( -type f -o -type l \) -name '*_history' -print0)
+    done
+    for root in "$h/Library/Application Support/nushell" "$h/.config/nushell"; do
+        shell_remove_history_file "$root/history.txt"
+        shell_clean_database "$root/history.sqlite3" nushell
+    done
+    root="$h/.local/share/xonsh"
+    for root in "$root" "$root/history_json"; do
+        guard_mutation_target "$root" || continue
+        while read_find_path entry; do
+            remove_path "$entry"
+        done < <(find_checked "$root" -maxdepth 1 \( -type f -o -type l \) -name 'xonsh-*.json' -print0)
+    done
+    shell_clean_database "$h/.local/share/xonsh/xonsh-history.sqlite" xonsh
+    shell_clean_database "$h/.histdb/zsh-history.db" histdb
+    for root in "$h/Library/Application Support/zoxide" "$h/.local/share/zoxide"; do
+        shell_remove_history_file "$root/db.zo"
+        shell_remove_history_file "$root/db.txt"
+    done
+    shell_remove_history_file "$h/.z"
+    shell_remove_history_file "$h/.fasd"
+    guard_mutation_target "$h/.ipython" || return 0
+    for root in "$h"/.ipython/profile_*; do
+        [ -d "$root" ] || continue
+        remove_sqlite_db "$root/history.sqlite"
+    done
+}
+
 module_shell() {
-    local u h uid hf mf=""
+    local u h uid hf mf="" extended=1
+    if ! shell_stores_stopped; then
+        log_warn "shell: close Atuin, fish, Nushell, Xonsh and IPython before extended history cleanup"
+        if [ "$DRY_RUN" -eq 0 ]; then
+            FAILED_COUNT=$((FAILED_COUNT + 1))
+            extended=0
+        fi
+    fi
     while IFS=$'\t' read -r u h uid; do
         [ -d "$h" ] || continue
         log_debug "shell: processing user '$u' ($h)"
@@ -1060,7 +1234,7 @@ module_shell() {
 SHELL_HISTORIES
         clear_dir_contents "$h/.bash_sessions"
         clear_dir_contents "$h/.zsh_sessions"
-        remove_sqlite_db "$h/.ipython/profile_default/history.sqlite"
+        if [ "$extended" -eq 1 ]; then shell_clean_alternative_stores "$h"; fi
         truncate_file "$h/.julia/logs/repl_history.jl"
         truncate_file "$h/.ghc/ghci_history"
         if [ -d "$h/.matlab" ]; then
@@ -1070,7 +1244,6 @@ SHELL_HISTORIES
                 truncate_file "$mf"
             done < <(find_checked "$h/.matlab" -mindepth 1 -maxdepth 2 -type f -name 'History.xml' -print0)
         fi
-        truncate_file "$h/.local/share/fish/fish_history"
         truncate_file "$h/.local/share/recently-used.xbel"
         truncate_file "$h/.local/share/mc/history"
         truncate_file "$h/.local/share/nano/search_history"
@@ -1839,10 +2012,16 @@ ai_agents_stopped() {
 # SQLite runs as the home owner, from a checked physical parent. Reject links
 # and hard links for the database AND sidecars before SQLite can open them.
 ai_sqlite_command() {
-    local db="$1" sqlite_bin="$2"
+    local db="$1" sqlite_bin="$2" sql
     shift 2
+    [ "$#" -eq 1 ] || return 1
+    # Only internal SQL templates reach this helper. They have no semicolons
+    # inside string literals. Apple's CLI can continue after an error in an
+    # argv string or one input line, even with -bail. Send one statement per
+    # input line so an error closes the connection before COMMIT.
+    sql="${1//;/$';\n'}"
     # shellcheck disable=SC2016
-    run_target_command "$db" /bin/sh -c '
+    printf '%s\n' "$sql" | run_target_command "$db" /bin/sh -c '
         db=$1; sqlite=$2; shift 2
         cd -P "${db%/*}" || exit 1
         [ "$(pwd -P)" = "${db%/*}" ] || exit 1
@@ -1856,8 +2035,8 @@ ai_sqlite_command() {
             links=$(stat -f %l "$p" 2>/dev/null) || links=$(stat -c %h "$p") || exit 1
             [ "$links" = 1 ] || exit 1
         done
-        exec "$sqlite" -batch -bail -noheader -init /dev/null "$file" "$@"
-    ' sh "$db" "$sqlite_bin" "$@"
+        exec "$sqlite" -batch -bail -noheader -init /dev/null "$file"
+    ' sh "$db" "$sqlite_bin"
 }
 
 # Only known tables are accepted. Mixed databases retain configuration and

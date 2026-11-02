@@ -198,3 +198,11 @@ a build artifact to debug failures. Example GitHub Actions step:
 JetBrains LocalHistory and Vim/Neovim state. It verifies byte-for-byte dry-run
 preservation, repeated cleanup, retained settings and unsaved buffers, process
 query failures, active editors, symlink boundaries and enumeration failures.
+
+### Alternative shell stores
+
+`tests/shell-stores.sh` uses marked temporary sandboxes and real SQLite databases.
+It verifies Atuin history and encrypted history record deletion, history pack
+manifest deletion, preservation of keys and mixed-store configuration, default
+file stores, named IPython profiles, dry-run stability, repeated cleanup,
+unknown schema and trigger refusal, link safety, and active-client detection.

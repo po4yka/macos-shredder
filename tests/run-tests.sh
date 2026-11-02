@@ -526,6 +526,7 @@ fi
 bash "$SCRIPT_DIR/regressions.sh"
 bash "$SCRIPT_DIR/ai-sessions.sh"
 bash "$SCRIPT_DIR/ai-editors.sh"
+bash "$SCRIPT_DIR/shell-stores.sh"
 bash "$SCRIPT_DIR/editor-history.sh"
 bash "$SCRIPT_DIR/volume-trash.sh"
 info 'all phases and regressions passed'

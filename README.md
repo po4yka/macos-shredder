@@ -48,7 +48,7 @@ Dry-run and `--list` do not create logs.
 
 | Module | Scope |
 | --- | --- |
-| `shell` | Shell and REPL histories |
+| `shell` | Shell and REPL histories, Atuin history, and directory jump stores |
 | `systemlogs` | Legacy system logs and diagnostic reports |
 | `audit` | Existing BSM audit trail files; BSM is legacy on current macOS |
 | `browser` | Safari, Chrome-family, and Firefox histories and caches |
@@ -80,6 +80,46 @@ the script does not change mount permissions. Disconnected volumes, custom
 mount points, and Trash for users without an eligible local home are outside
 this scope. The per-UID layout is also used by the
 [macOS trash utility](https://github.com/morgant/tools-osx/blob/master/src/trash).
+
+## Shell history stores
+
+The `shell` module also clears these default locations in each eligible home:
+
+| Client | Local data cleared |
+| --- | --- |
+| Atuin | `~/.local/share/atuin/{history,records}.db` and `~/.atuin/data/{history,records}.db`: history rows, events, encrypted history records, and version `001` history pack manifests |
+| fish | `*_history` files in `~/.local/share/fish` and the legacy `~/.config/fish` directory |
+| Nushell | `history.txt` and history rows in `history.sqlite3`, under `~/Library/Application Support/nushell` and `~/.config/nushell` |
+| Xonsh | `xonsh-*.json` under `~/.local/share/xonsh` and its `history_json` directory; history rows in `xonsh-history.sqlite` |
+| zsh-histdb | History, command, and directory rows in `~/.histdb/zsh-history.db` |
+| zoxide, z, fasd | `db.zo` and `db.txt` under the macOS and XDG default zoxide directories; `~/.z` and `~/.fasd` |
+| IPython | `history.sqlite` and sidecars in every `~/.ipython/profile_*` directory |
+
+Close Atuin, including its daemon, fish, Nushell, Xonsh, and IPython first.
+A real run skips these additional stores and exits `2` if any of these clients
+is running or the process check fails. The script does not stop them. Run it
+from a separate Bash or Zsh process with history recording disabled. Other
+open shells can write their in-memory history back after cleanup.
+
+Atuin keys, session tokens, host IDs, configuration, aliases, KV entries, and
+scripts are preserved. SQLite history cleanup checks the schema and refuses
+unknown tables, triggers, unsupported pack manifest formats, or linked database
+files. Both Atuin databases are checked before their history is cleared.
+Shell configuration files, fish universal variables, and IPython startup files
+are preserved.
+
+This is local cleanup. It does not remove history from an Atuin sync server or
+other devices. Sync can download the history again. Custom database paths,
+custom XDG roots, third-party history backends, captured Atuin command output,
+and Atuin AI stores are outside this module's scope. The script does not read
+or execute shell startup files to infer custom paths.
+
+Storage references: [Atuin paths](https://github.com/atuinsh/atuin/blob/main/crates/atuin-common/src/dirs.rs),
+[Atuin record schema](https://github.com/atuinsh/atuin/blob/main/crates/atuin-client/record-migrations/20231127090831_create-store.sql),
+[Atuin pack manifests](https://github.com/atuinsh/atuin/blob/main/crates/atuin-client/src/packfile/record.rs),
+[history file locations](https://docs.atuin.sh/main/reference/import/),
+[Xonsh history](https://xon.sh/tutorial_hist.html), and
+[zoxide storage](https://github.com/ajeetdsouza/zoxide/blob/main/src/db/mod.rs).
 
 ## Editor history
 
