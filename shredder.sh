@@ -1743,8 +1743,14 @@ remove_aged_closed_log() {
     [ ! -L "$file" ] && [ -f "$file" ] || return 0
     modified="$(stat -f %m "$file" 2>/dev/null || true)"
     case "$modified" in ''|*[!0-9]*) modified="$(stat -c %Y "$file" 2>/dev/null || true)" ;; esac
-    now="$(date +%s)"
-    case "$modified:$now" in *[!0-9:]*|:*|*:) return 0 ;; esac
+    now="$(date +%s 2>/dev/null || true)"
+    case "$modified:$now" in
+        *[!0-9:]*|:*|*:)
+            log_warn "cannot read the log modification time; retaining: $file"
+            [ "$DRY_RUN" -eq 1 ] || FAILED_COUNT=$((FAILED_COUNT + 1))
+            return 0
+            ;;
+    esac
     [ "$((now - modified))" -gt "$((LOGS_OLDER_THAN * 86400))" ] || return 0
     if [ "$TEST_MODE" -eq 0 ]; then
         if ! command -v lsof >/dev/null 2>&1; then

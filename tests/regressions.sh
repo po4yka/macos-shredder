@@ -605,3 +605,18 @@ test_json_cleanup_keeps_mode() (
 )
 test_json_cleanup_keeps_mode
 printf 'PASS: JSON cleanup keeps the file mode\n'
+
+test_aged_log_unknown_time() (
+    setup_case aged-log-time
+    mkdir -p "$VAR_LOG"
+    printf 'old\n' > "$VAR_LOG/system.log.1"
+    LOGS_OLDER_THAN=1
+    # shellcheck disable=SC2329 # simulate an unreadable modification time
+    stat() { return 1; }
+    remove_aged_closed_log "$VAR_LOG/system.log.1"
+    unset -f stat
+    [ "$FAILED_COUNT" -eq 1 ]
+    [ -s "$VAR_LOG/system.log.1" ]
+)
+test_aged_log_unknown_time
+printf 'PASS: an unreadable log age is reported, not skipped silently\n'
