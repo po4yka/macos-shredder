@@ -634,3 +634,31 @@ test_slack_json_stops_on_check() (
 )
 test_slack_json_stops_on_check
 printf 'PASS: a failed Slack JSON check prints no channel names\n'
+
+test_process_match_without_sigpipe() (
+    setup_case process-sigpipe
+    local bin="$WORK/sigpipe-bin"
+    mkdir -p "$bin"
+    # A large table with an early match. GNU grep can exit before it reads
+    # all input; a writer in a pipe would then fail under pipefail.
+    cat > "$bin/ps" <<'STUB'
+#!/bin/sh
+case "$*" in
+    *'-axo pid=,ppid=,uid=,command='*)
+        printf '10 1 501 /Applications/Maccy.app/Contents/MacOS/Maccy\n'
+        i=0; while [ "$i" -lt 4000 ]; do
+            printf '%s 1 501 /usr/libexec/filler-process-with-a-long-command-line-%s\n' "$((i + 100))" "$i"
+            i=$((i + 1))
+        done ;;
+    *'-o ppid= -p'*) printf '1\n' ;;
+esac
+STUB
+    chmod +x "$bin/ps"
+    PATH="$bin:$PATH"
+    TEST_MODE=0
+    # shellcheck disable=SC2329 # a grep that exits at once, without reading
+    grep() { return 0; }
+    if clipboard_maccy_stopped; then return 1; fi
+)
+test_process_match_without_sigpipe
+printf 'PASS: process matches do not depend on grep reading all input\n'

@@ -1324,7 +1324,7 @@ clipboard_maccy_stopped() {
     [ "$TEST_MODE" -eq 0 ] || return 0
     local processes
     processes="$(process_list command)" || return 1
-    if printf '%s\n' "$processes" | grep -Ei '(^|[ /])Maccy([[:space:]/]|$|\.app/)' >/dev/null; then
+    if grep -Ei '(^|[ /])Maccy([[:space:]/]|$|\.app/)' >/dev/null <<< "$processes"; then
         return 1
     fi
     return 0
@@ -1582,7 +1582,7 @@ shell_stores_stopped() {
     processes="$(process_list command)" || return 1
     # Bash/zsh can run this script. They cannot be closed from here; their
     # in-memory history can be written back and is documented separately.
-    if printf '%s\n' "$processes" | grep -Ei '(^|[ /])(atuin|nu|xonsh|fish|ipython)([[:space:]/]|$|\.(py|exe)([[:space:]]|$))' >/dev/null; then
+    if grep -Ei '(^|[ /])(atuin|nu|xonsh|fish|ipython)([[:space:]/]|$|\.(py|exe)([[:space:]]|$))' >/dev/null <<< "$processes"; then
         return 1
     fi
     return 0
@@ -1594,7 +1594,7 @@ terminal_sessions_stopped() {
     processes="$(process_list command)" || return 1
     # Include the app executable, CLI and helper processes. A failed process
     # query also blocks cleanup; --force must not bypass this check.
-    if printf '%s\n' "$processes" | grep -Ei '(^|[ /])(cmux|cmuxterm)([[:space:]/.-]|$)' >/dev/null; then
+    if grep -Ei '(^|[ /])(cmux|cmuxterm)([[:space:]/.-]|$)' >/dev/null <<< "$processes"; then
         return 1
     fi
     return 0
@@ -2720,7 +2720,7 @@ headless_stopped() {
         log_warn "headless: cannot inspect browser processes; cleanup refused"
         return 1
     fi
-    if printf '%s\n' "$processes" | grep -Ei '(^|/)(Google Chrome|Chromium|chrome|chromium|chrome-headless-shell|headless_shell)([ /]|$)|/(Google Chrome|Chromium|Microsoft Edge|Brave Browser)[^/]*\.app/|(^|[ /])(@playwright|playwright(-core)?|puppeteer(-core)?|chrome-devtools-mcp)([ /]|$)' >/dev/null; then
+    if grep -Ei '(^|/)(Google Chrome|Chromium|chrome|chromium|chrome-headless-shell|headless_shell)([ /]|$)|/(Google Chrome|Chromium|Microsoft Edge|Brave Browser)[^/]*\.app/|(^|[ /])(@playwright|playwright(-core)?|puppeteer(-core)?|chrome-devtools-mcp)([ /]|$)' >/dev/null <<< "$processes"; then
         log_warn "headless: close browsers and browser automation first"
         return 1
     fi
@@ -2810,7 +2810,7 @@ editors_stopped() {
         log_warn "editors: cannot inspect running processes; cleanup refused"
         return 1
     fi
-    if printf '%s\n' "$processes" | grep -Ei '(^|[ /])(vi|vim|view|ex|rvim|rview|vimdiff|gvim|gvimdiff|mvim|nvim|nvim-qt|code|code-insiders|codium|cursor|windsurf)([[:space:]]|$)|/(Visual Studio Code[^/]*|Code - Insiders|VSCodium|Cursor|Windsurf[^/]*|IntelliJ IDEA[^/]*|PyCharm[^/]*|WebStorm[^/]*|GoLand[^/]*|CLion[^/]*|Rider[^/]*|PhpStorm[^/]*|RubyMine[^/]*|RustRover[^/]*|DataGrip[^/]*|DataSpell[^/]*|Aqua[^/]*|Android Studio[^/]*|MacVim)\.app/|(-Didea\.(paths\.selector|home\.path)=|com\.intellij\.idea\.Main)' >/dev/null; then
+    if grep -Ei '(^|[ /])(vi|vim|view|ex|rvim|rview|vimdiff|gvim|gvimdiff|mvim|nvim|nvim-qt|code|code-insiders|codium|cursor|windsurf)([[:space:]]|$)|/(Visual Studio Code[^/]*|Code - Insiders|VSCodium|Cursor|Windsurf[^/]*|IntelliJ IDEA[^/]*|PyCharm[^/]*|WebStorm[^/]*|GoLand[^/]*|CLion[^/]*|Rider[^/]*|PhpStorm[^/]*|RubyMine[^/]*|RustRover[^/]*|DataGrip[^/]*|DataSpell[^/]*|Aqua[^/]*|Android Studio[^/]*|MacVim)\.app/|(-Didea\.(paths\.selector|home\.path)=|com\.intellij\.idea\.Main)' >/dev/null <<< "$processes"; then
         log_warn "editors: close supported editors and their background processes first"
         return 1
     fi
@@ -2961,7 +2961,7 @@ ai_agents_stopped() {
         log_warn "ai: cannot inspect running processes; cleanup refused"
         return 1
     fi
-    if printf '%s\n' "$processes" | grep -Ei '(^|[ /])(claude|codex|opencode|cursor-agent|cursor|windsurf|cline|roo|cn|aider)([[:space:]/]|$|\.(js|py)([[:space:]]|$))|/(Codex|Claude|OpenCode|Cursor|Windsurf[^/]*|Visual Studio Code[^/]*|Code - Insiders|VSCodium|IntelliJ IDEA[^/]*|PyCharm[^/]*|WebStorm|GoLand|CLion|Rider|PhpStorm|RubyMine|RustRover|Android Studio)\.app/' >/dev/null; then
+    if grep -Ei '(^|[ /])(claude|codex|opencode|cursor-agent|cursor|windsurf|cline|roo|cn|aider)([[:space:]/]|$|\.(js|py)([[:space:]]|$))|/(Codex|Claude|OpenCode|Cursor|Windsurf[^/]*|Visual Studio Code[^/]*|Code - Insiders|VSCodium|IntelliJ IDEA[^/]*|PyCharm[^/]*|WebStorm|GoLand|CLion|Rider|PhpStorm|RubyMine|RustRover|Android Studio)\.app/' >/dev/null <<< "$processes"; then
         log_warn "ai: close AI agents, supported editors and their background servers first"
         return 1
     fi
@@ -3490,7 +3490,7 @@ ai_extended_stopped() {
         log_warn "ai: cannot inspect extended clients; cleanup refused"
         return 1
     fi
-    if printf '%s\n' "$processes" | grep -Ei '(^|[ /])(gemini|antigravity(-cli|-ide)?|agy|serena|serena-mcp-server|context-mode|mcp-server-context-mode)([[:space:]/.]|$)|/(ChatGPT[^/]*|Antigravity[^/]*|Claude)\.app/|@google/gemini-cli/|/context-mode/|/serena/' >/dev/null; then
+    if grep -Ei '(^|[ /])(gemini|antigravity(-cli|-ide)?|agy|serena|serena-mcp-server|context-mode|mcp-server-context-mode)([[:space:]/.]|$)|/(ChatGPT[^/]*|Antigravity[^/]*|Claude)\.app/|@google/gemini-cli/|/context-mode/|/serena/' >/dev/null <<< "$processes"; then
         log_warn "ai: close Gemini, Antigravity, ChatGPT, Claude Desktop, Serena and context-mode servers first"
         return 1
     fi
@@ -3793,7 +3793,7 @@ slack_exporters_stopped() {
     [ "$TEST_MODE" -eq 0 ] || return 0
     local processes
     processes="$(process_list command)" || return 1
-    if printf '%s\n' "$processes" | grep -Ei '^[[:space:]]*([^[:space:]]*/)?(slackdump([^[:space:]/]*)?|slack[-_](export|sync)[^[:space:]/]*)([[:space:]]|$)|^[[:space:]]*([^[:space:]]*/)?(bash|sh|zsh|python[0-9.]*|node|ruby|perl)([[:space:]]+-[^[:space:]]+)*[[:space:]]+[^[:space:]]*(slack[-_](export|sync)|slack[_-]dump/[^[:space:]]*(sync|export))[^[:space:]]*([[:space:]]|$)' >/dev/null; then
+    if grep -Ei '^[[:space:]]*([^[:space:]]*/)?(slackdump([^[:space:]/]*)?|slack[-_](export|sync)[^[:space:]/]*)([[:space:]]|$)|^[[:space:]]*([^[:space:]]*/)?(bash|sh|zsh|python[0-9.]*|node|ruby|perl)([[:space:]]+-[^[:space:]]+)*[[:space:]]+[^[:space:]]*(slack[-_](export|sync)|slack[_-]dump/[^[:space:]]*(sync|export))[^[:space:]]*([[:space:]]|$)' >/dev/null <<< "$processes"; then
         return 1
     fi
     return 0
@@ -4083,7 +4083,7 @@ selected_artifact_idle() {
     local target="$1" pattern="$2" processes result rc=0
     [ "$TEST_MODE" -eq 0 ] || return 0
     processes="$(process_list comm)" || return 1
-    if printf '%s\n' "$processes" | grep -Ei "$pattern" >/dev/null; then return 1; fi
+    if grep -Ei "$pattern" >/dev/null <<< "$processes"; then return 1; fi
     command -v lsof >/dev/null 2>&1 || return 1
     if [ -d "$target" ]; then
         result="$(lsof -t +D "$target" 2>&1)" || rc=$?
@@ -4257,7 +4257,7 @@ terminal_clients_stopped() {
     local processes
     [ -n "${1:-}" ] || return 1
     processes="$(process_list command "$1")" || return 1
-    if printf '%s\n' "$processes" | grep -Ei '(^|[ /])(Terminal|iTerm2?|iTermServer[^ /]*)([[:space:]/]|$)' >/dev/null; then
+    if grep -Ei '(^|[ /])(Terminal|iTerm2?|iTermServer[^ /]*)([[:space:]/]|$)' >/dev/null <<< "$processes"; then
         return 1
     fi
     return 0
@@ -4328,7 +4328,7 @@ finder_history_clients_stopped() {
     local processes
     [ -n "${1:-}" ] || return 1
     processes="$(process_list command "$1")" || return 1
-    if printf '%s\n' "$processes" | grep -E '(^|[ /])(Finder|com\.apple\.appkit\.xpc\.openAndSavePanelService)([[:space:]/]|$)' >/dev/null; then
+    if grep -E '(^|[ /])(Finder|com\.apple\.appkit\.xpc\.openAndSavePanelService)([[:space:]/]|$)' >/dev/null <<< "$processes"; then
         return 1
     fi
     return 0
@@ -4721,7 +4721,7 @@ activity_store_idle() {
     # stores keep the check across every account.
     owner="$(trash_stat_number %u "$db")" || return 1
     processes="$(process_list comm "$owner")" || return 1
-    if printf '%s\n' "$processes" | grep -E "(^|/)${pattern}$" >/dev/null; then return 1; fi
+    if grep -E "(^|/)${pattern}$" >/dev/null <<< "$processes"; then return 1; fi
     for suffix in '' -wal -shm -journal; do
         [ -e "$db$suffix" ] || continue
         slack_export_file_idle "$db$suffix" || return 1
