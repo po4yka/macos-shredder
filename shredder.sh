@@ -74,6 +74,7 @@ CLIPBOARD_CURRENT=0
 HEADLESS_DAYS=7
 SLACK_EXPORT_ROOTS=()
 METADATA_FILES=()
+VERSION_FILES=()
 AI_ROOTS=()
 AI_CLAUDE_TMP_BASE=/private/tmp
 TEST_MODE=0
@@ -122,6 +123,7 @@ MODULE_IDS=(
     terminal
     finderhistory
     filemetadata
+    documentversions
     notifications
     activity
     siri
@@ -150,6 +152,7 @@ MODULE_DESCS=(
     "Terminal saved output and selected logs (explicit selection only)"
     "Finder and Open/Save history keys (explicit selection only)"
     "Selected file origin metadata (explicit selection only)"
+    "Previous versions of selected local documents (explicit only)"
     "Delivered notification history (explicit selection only)"
     "Known activity stores; reports unsupported stores (explicit only)"
     "Siri and Dictation deletion instructions (manual action required)"
@@ -745,6 +748,9 @@ Options:
       --metadata-file PATH
                         Clear origin metadata on one file below /Users/<user>/.
                         Requires --modules filemetadata; repeat for more files.
+      --version-file PATH
+                        Remove previous versions of one local file; retain its contents.
+                        Requires --modules documentversions; repeat for more files.
       --ai-root KIND=PATH
                         Add an AI storage location below /Users/<user>/.
                         Kinds: claude, codex, codex-db, opencode,
@@ -915,6 +921,11 @@ parse_args() {
                 add_metadata_file "$2"; shift 2
                 ;;
             --metadata-file=*) add_metadata_file "${1#*=}"; shift ;;
+            --version-file)
+                [ $# -ge 2 ] || usage_error "--version-file requires a file"
+                add_version_file "$2"; shift 2
+                ;;
+            --version-file=*) add_version_file "${1#*=}"; shift ;;
             --ai-root)
                 [ $# -ge 2 ] || usage_error "--ai-root requires KIND=PATH"
                 add_ai_root "$2"
@@ -951,6 +962,11 @@ parse_args() {
         [ "${#METADATA_FILES[@]}" -gt 0 ] || usage_error "filemetadata requires --metadata-file"
     elif [ "${#METADATA_FILES[@]}" -gt 0 ]; then
         usage_error "--metadata-file requires explicit --modules filemetadata"
+    fi
+    if module_selected documentversions; then
+        [ "${#VERSION_FILES[@]}" -gt 0 ] || usage_error "documentversions requires --version-file"
+    elif [ "${#VERSION_FILES[@]}" -gt 0 ]; then
+        usage_error "--version-file requires explicit --modules documentversions"
     fi
     case "$HEADLESS_DAYS" in ''|*[!0-9]*|0*|??????*) usage_error "--headless-days must be between 1 and 99999" ;; esac
     if module_selected slackexport; then
@@ -3903,6 +3919,130 @@ module_filemetadata() {
     return 0
 }
 
+# --- module: documentversions -----------------------------------------------
+
+add_version_file() {
+    local path="$1" relative user existing
+    case "$path" in /Users/*/*) ;; *) usage_error "version files must be below /Users/<user>/" ;; esac
+    case "$path" in
+        *//*|*/./*|*/../*|*/.|*/..|*/|*$'\n'*|*$'\r'*|*$'\t'*)
+            usage_error "version files must have normalized absolute paths" ;;
+    esac
+    relative="${path#/Users/}"; user="${relative%%/*}"
+    case "$user" in ''|Shared|Guest|.*) usage_error "ineligible version file home" ;; esac
+    for existing in ${VERSION_FILES[@]+"${VERSION_FILES[@]}"}; do
+        [ "$existing" != "$path" ] || return 0
+    done
+    VERSION_FILES+=("$path")
+}
+
+# The URL API creates a missing file. Check identity again inside the coordinated
+# write, and never call it for a missing/replaced item or an iCloud document.
+document_versions_native() {
+    local target="$1" dry_run="$2"
+    # shellcheck disable=SC2016
+    run_target_command "$target" /bin/sh -c '
+        parent=${1%/*}; entry=${1##*/}
+        cd -P "$parent" || exit 1
+        [ "$(pwd -P)" = "$parent" ] || exit 1
+        [ -f "./$entry" ] && [ ! -L "./$entry" ] || exit 1
+        [ "$(/usr/bin/stat -f %l "./$entry")" = 1 ] || exit 1
+        owner=$(/usr/bin/id -u) || exit 1
+        [ "$(/usr/bin/stat -f %u "./$entry")" = "$owner" ] || exit 1
+        identity=$(/usr/bin/stat -f "%d:%i" "./$entry") || exit 1
+        exec /usr/bin/osascript -l JavaScript - "$1" "$2" "$owner" "$identity"
+    ' sh "$target" "$dry_run" <<'JXA'
+ObjC.import('Foundation');
+function run(argv) {
+    const path = argv[0], dryRun = argv[1] === '1';
+    const owner = Number(argv[2]), identity = argv[3];
+    const manager = $.NSFileManager.defaultManager;
+    const url = $.NSURL.fileURLWithPath(path);
+    function check(candidate) {
+        if (ObjC.unwrap(candidate.path) !== path) throw Error('path changed');
+        // NSURL can rewrite /private/var to /var even without a symlink in
+        // the supplied path. Inspect every component instead of that alias.
+        let prefix = '';
+        const parts = path.split('/').slice(1);
+        for (let i = 0; i < parts.length; i++) {
+            prefix += '/' + parts[i];
+            const component = manager.attributesOfItemAtPathError(prefix, Ref());
+            if (!component || component.isNil() ||
+                ObjC.unwrap(component.objectForKey($.NSFileType)) === ObjC.unwrap($.NSFileTypeSymbolicLink))
+                throw Error('missing or linked path component');
+        }
+        const error = Ref();
+        const attrs = manager.attributesOfItemAtPathError(path, error);
+        if (!attrs || attrs.isNil()) throw Error('file missing');
+        function attr(key) { return ObjC.unwrap(attrs.objectForKey(key)); }
+        if (attr($.NSFileType) !== ObjC.unwrap($.NSFileTypeRegular) ||
+            Number(attr($.NSFileReferenceCount)) !== 1 ||
+            Number(attr($.NSFileOwnerAccountID)) !== owner ||
+            String(attr($.NSFileSystemNumber)) + ':' + String(attr($.NSFileSystemFileNumber)) !== identity)
+            throw Error('file identity changed');
+        const cloud = Ref();
+        if (!candidate.getResourceValueForKeyError(cloud, $.NSURLIsUbiquitousItemKey, error) ||
+            ObjC.unwrap(cloud[0])) throw Error('cloud status unavailable or iCloud file');
+    }
+    function countVersions(candidate) {
+        return Number($.NSFileVersion.otherVersionsOfItemAtURL(candidate).count);
+    }
+    check(url);
+    if (dryRun) return countVersions(url) === 0 ? 'none' : 'planned';
+    const coordinator = $.NSFileCoordinator.alloc.initWithFilePresenter($());
+    const error = Ref();
+    let result = '', failure = '';
+    coordinator.coordinateWritingItemAtURLOptionsErrorByAccessor(url, 0, error, function(item) {
+        try {
+            check(item);
+            if (countVersions(item) === 0) { result = 'none'; return; }
+            const removalError = Ref();
+            if (!$.NSFileVersion.removeOtherVersionsOfItemAtURLError(item, removalError))
+                throw Error('version removal failed');
+            check(item);
+            if (countVersions(item) !== 0) throw Error('versions remain');
+            result = 'cleaned';
+        } catch (e) { failure = String(e); }
+    });
+    if (failure || !result) throw Error('coordinated version removal failed');
+    return result;
+}
+JXA
+}
+
+module_documentversions() {
+    local item target matched u h uid result
+    for item in ${VERSION_FILES[@]+"${VERSION_FILES[@]}"}; do
+        target="$SANDBOX$item"; matched=0
+        while IFS=$'\t' read -r u h uid; do
+            case "$target" in "$h"/*) matched=1 ;; esac
+        done < <(enumerate_users)
+        if [ "$matched" -ne 1 ]; then
+            log_warn "documentversions: no eligible user home: $item"
+            FAILED_COUNT=$((FAILED_COUNT + 1)); continue
+        fi
+        guard_mutation_target "$target" || continue
+        if [ ! -f "$target" ] || [ -L "$target" ] || ! slack_export_file_idle "$target"; then
+            log_warn "documentversions: selected file missing, unsafe or open: $item"
+            FAILED_COUNT=$((FAILED_COUNT + 1)); continue
+        fi
+        result=''
+        if result="$(document_versions_native "$target" "$DRY_RUN" 2>/dev/null)"; then
+            case "$result" in
+                none) log_debug "documentversions: no other versions: $item" ;;
+                planned|cleaned)
+                    CLEANED_COUNT=$((CLEANED_COUNT + 1))
+                    log_debug "documentversions: $result other versions: $item" ;;
+                *) FAILED_COUNT=$((FAILED_COUNT + 1)); log_warn "documentversions: unexpected native result: $item" ;;
+            esac
+        else
+            log_warn "documentversions: native checks or coordination failed; inspect the selected file: $item"
+            FAILED_COUNT=$((FAILED_COUNT + 1))
+        fi
+    done
+    return 0
+}
+
 # --- modules: notifications / activity / siri -------------------------------
 # System writers are not killed. An offline store is required: daemon restarts
 # can recreate data or hold stale Core Data state after direct SQLite cleanup.
@@ -4052,7 +4192,7 @@ module_siri() {
 
 module_selected() {
     if [ -z "$SELECTED_MODULES" ]; then
-        case "$1" in fsevents|clipboard|headless|slackexport|terminal|finderhistory|filemetadata|notifications|activity|siri) return 1 ;; *) return 0 ;; esac
+        case "$1" in fsevents|clipboard|headless|slackexport|terminal|finderhistory|filemetadata|documentversions|notifications|activity|siri) return 1 ;; *) return 0 ;; esac
     fi
     case ",$SELECTED_MODULES," in
         *",$1,"*) return 0 ;;
@@ -4085,6 +4225,7 @@ run_module() {
         terminal)    module_terminal ;;
         finderhistory) module_finderhistory ;;
         filemetadata) module_filemetadata ;;
+        documentversions) module_documentversions ;;
         notifications) module_notifications ;;
         activity)    module_activity ;;
         siri)        module_siri ;;

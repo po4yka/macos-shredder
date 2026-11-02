@@ -244,3 +244,12 @@ those failures are visible in command output but do not automatically populate
 
 The fixture checks do not establish secure erasure on APFS or SSDs. They verify
 selected logical removals and preservation rules against the tested layouts.
+
+### Document versions
+
+`bash tests/document-versions.sh` verifies explicit selection, path guards,
+owner and link checks, failure reporting and dry-run behavior. On macOS it
+creates an `NSFileVersion` only for a synthetic document in a marked temporary
+fixture, removes that version through the native coordinated API, and checks
+that current contents stay unchanged. On other systems it uses a native-boundary
+double and reports that the native check is unavailable.

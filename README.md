@@ -102,6 +102,7 @@ home directories. There is no single-user selection option.
 | `--clipboard-current` | Also clear the verified active GUI user's current clipboard |
 | `--headless-days N` | Keep Chrome Headless profiles with changes in the last N days; default 7, range 1–99999 |
 | `--slack-export-root PATH` | Select a local Slack export directory; repeatable and required with `--modules slackexport` |
+| `--version-file PATH` | Select one local document for previous-version removal; repeatable, requires `documentversions` |
 | `--metadata-file PATH` | Select one file for origin metadata cleanup; repeatable, requires `filemetadata` |
 | `--ai-root KIND=PATH` | Add a custom AI storage location; repeat for multiple roots |
 
@@ -151,6 +152,7 @@ recording, and shell history can independently retain records of a run.
 | `slackexport` | Explicit | Known data in explicitly selected local Slack exports |
 | `terminal` | Explicit | Terminal/iTerm2 saved output and explicitly selected session logs |
 | `finderhistory` | Explicit | Known Finder and Open/Save history keys |
+| `documentversions` | Explicit | Previous versions of selected local documents; current file stays |
 | `filemetadata` | Explicit | Origin metadata on explicitly selected files |
 | `notifications` | Explicit | Known delivered Notification Center history |
 | `activity` | Explicit | Known KnowledgeC and IntelligencePlatform event/feedback tables; reports unsupported stores |
@@ -854,3 +856,27 @@ directories are rejected.
 ## License
 
 This project uses the [MIT License](LICENSE).
+
+### Selected document versions
+
+`documentversions` requires an explicit `--version-file /Users/<user>/path`
+for each existing local regular file. Close the file in all apps first.
+
+```bash
+./shredder.sh --modules documentversions --version-file /Users/alice/Documents/report.txt --dry-run --debug
+```
+
+The module calls Apple's `NSFileVersion` API inside an `NSFileCoordinator`
+write operation as the home owner. It removes previous versions and retains the
+current file contents. It does not delete `.DocumentRevisions-V100` directories.
+Dry-run reads version metadata only. The module refuses missing files, links,
+shared hard links, owner mismatches, open files and iCloud documents. It checks
+the file identity again inside the coordinated write. Coordination requires
+cooperating applications; do not rename or modify selected files during cleanup.
+It does not remove copies, backups, remote versions or snapshots, and does not
+guarantee secure erasure. A native API failure is reported, including a partial
+removal failure; the operation cannot restore versions already removed.
+
+Apple's [version-removal API](https://developer.apple.com/documentation/foundation/nsfileversion/removeotherversionsofitem(at:))
+requires coordinated writes and can create a missing file. The module checks
+that the selected file still exists before it calls this API.
