@@ -173,6 +173,10 @@ test_process_guard() (
         PROCESS_LINE="/opt/homebrew/bin/$name daemon"
         if shell_stores_stopped; then exit 1; fi
     done
+    for PROCESS_LINE in '/opt/homebrew/bin/python3 -m ipykernel_launcher -f kernel.json' \
+        '/opt/homebrew/bin/python3 /opt/homebrew/bin/jupyter-lab'; do
+        if shell_stores_stopped; then exit 1; fi
+    done
     PROCESS_LINE='/bin/bash shredder.sh --modules shell --force'
     shell_stores_stopped
     ps() { return 1; }

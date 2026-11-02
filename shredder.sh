@@ -1582,7 +1582,8 @@ shell_stores_stopped() {
     processes="$(process_list command)" || return 1
     # Bash/zsh can run this script. They cannot be closed from here; their
     # in-memory history can be written back and is documented separately.
-    if grep -Ei '(^|[ /])(atuin|nu|xonsh|fish|ipython)([[:space:]/]|$|\.(py|exe)([[:space:]]|$))' >/dev/null <<< "$processes"; then
+    # Jupyter kernels write the same IPython history database.
+    if grep -Ei '(^|[ /])(atuin|nu|xonsh|fish|ipython|jupyter(-lab|-notebook|-server)?|ipykernel_launcher|ipykernel)([[:space:]/]|$|\.(py|exe)([[:space:]]|$))' >/dev/null <<< "$processes"; then
         return 1
     fi
     return 0

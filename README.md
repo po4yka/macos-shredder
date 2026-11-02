@@ -853,7 +853,8 @@ The additional stores below have separate process and schema checks:
 | zoxide, z, fasd | `db.zo` and `db.txt` under the macOS and XDG default zoxide directories; `~/.z` and `~/.fasd` |
 | IPython | `history.sqlite` and sidecars in every `~/.ipython/profile_*` directory |
 
-Close Atuin, including its daemon, fish, Nushell, Xonsh, and IPython first.
+Close Atuin, including its daemon, fish, Nushell, Xonsh, IPython, and Jupyter
+servers and kernels first.
 A real run skips these additional stores and exits `2` if any of these clients
 is running or the process check fails. The script does not stop them. Run it
 from a separate Bash or Zsh process with history recording disabled. Other
