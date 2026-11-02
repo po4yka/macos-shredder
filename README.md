@@ -15,7 +15,7 @@ browser data, usage databases, caches, Trash, and related activity traces.
 - System Integrity Protection can block some system locations.
 - macOS services can recreate caches, indexes, and databases after cleanup.
 - Close browsers before the `browser` module. The script skips active browser
-  databases to avoid corruption.
+  databases to avoid corruption. A real run with skipped browser data exits `2`.
 - Firefox history cleanup preserves bookmarks and keywords in `places.sqlite`.
   If SQLite is unavailable or cleanup fails, the database is retained and the
   run reports a failure.

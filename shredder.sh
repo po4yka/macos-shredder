@@ -1083,8 +1083,11 @@ module_audit() {
 clean_safari_for_home() {
     local h="$1"
     local saf="$h/Library/Safari"
-    if browser_running "Safari"; then
+    if browser_running "Safari" && { [ -d "$saf" ] \
+        || [ -d "$h/Library/Containers/com.apple.Safari" ] \
+        || [ -d "$h/Library/Cookies" ]; }; then
         log_warn "Safari is running; skipping Safari database deletion (data integrity)"
+        [ "$DRY_RUN" -eq 1 ] || FAILED_COUNT=$((FAILED_COUNT + 1))
     else
         remove_sqlite_db "$saf/History.db"
         remove_path "$saf/History.db-lock"
@@ -1125,6 +1128,7 @@ clean_chrome_family_for_home() {
         [ -d "$appdir" ] || continue
         if browser_running "$proc"; then
             log_warn "$label is running; skipping $label database deletion (data integrity)"
+            [ "$DRY_RUN" -eq 1 ] || FAILED_COUNT=$((FAILED_COUNT + 1))
         else
             for prof in "$appdir/Default" "$appdir"/Profile\ */; do
                 prof="${prof%/}"
@@ -1212,6 +1216,7 @@ clean_firefox_for_home() {
     local skip_dbs=0 prof
     if browser_running "firefox"; then
         log_warn "Firefox is running; skipping Firefox database deletion (data integrity)"
+        [ "$DRY_RUN" -eq 1 ] || FAILED_COUNT=$((FAILED_COUNT + 1))
         skip_dbs=1
     fi
     for prof in "$profiles"/*/; do

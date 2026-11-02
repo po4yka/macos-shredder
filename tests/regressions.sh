@@ -179,3 +179,23 @@ test_firefox_session() (
 )
 test_firefox_session
 printf 'PASS: Firefox sessions are cleared only while the browser is closed\n'
+
+test_running_browser_status() (
+    setup_case running-browser
+    local h="$USERS_DIR/alice" path rc=0
+    for path in 'Safari/History.db' 'Application Support/Google/Chrome/Default/History' \
+        'Application Support/Firefox/Profiles/custom/cookies.sqlite'; do
+        mkdir -p "${h}/Library/${path%/*}"
+        printf 'active data\n' > "$h/Library/$path"
+    done
+    # shellcheck disable=SC2329 # deterministic running-process check for main
+    browser_running() { return 0; }
+    (main --force --modules browser) > "$WORK/running-browser.log" 2>&1 || rc=$?
+    [ "$rc" -eq 2 ]
+    grep -q 'Failed operations: 3' "$WORK/running-browser.log"
+    [ "$(find "$h" -type f | wc -l | tr -d ' ')" -eq 3 ]
+    /bin/bash "$SHREDDER" --force --modules browser >/dev/null 2>&1
+    [ -z "$(find "$h" -type f -print)" ]
+)
+test_running_browser_status
+printf 'PASS: skipped active browsers return exit 2 without deleting their data\n'
