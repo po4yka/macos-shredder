@@ -710,3 +710,15 @@ test_sqlite_stat_tables() (
 )
 test_sqlite_stat_tables
 printf 'PASS: SQLite statistics tables do not block cleanup\n'
+
+test_process_match_fails_closed() (
+    setup_case process-match
+    process_match -E 'Maccy' $'/bin/zsh\n/Applications/Maccy.app/Contents/MacOS/Maccy'
+    if process_match -E 'Maccy' '/bin/zsh'; then return 1; fi
+    # A grep error must block cleanup like a running client.
+    # shellcheck disable=SC2329 # simulated grep failure
+    grep() { return 2; }
+    process_match -E 'Maccy' '/bin/zsh'
+)
+test_process_match_fails_closed
+printf 'PASS: process matching fails closed on grep errors\n'
