@@ -87,10 +87,9 @@ home directories. There is no single-user selection option.
 | `-v`, `--version` | Show the script version |
 | `-l`, `--list` | List the module IDs and descriptions |
 | `-m`, `--modules IDS` | Select comma-separated module IDs; omitted means the 16 standard modules |
-| `-n`, `--dry-run` | Preview without changing cleanup targets or creating an operation log |
+| `-n`, `--dry-run` | Preview without changing cleanup targets |
 | `-d`, `--debug` | Show detailed operations and skipped paths |
 | `-f`, `--force` | Skip the cleanup confirmation prompt |
-| `--logfile FILE` | Create a private operation log after confirmation |
 | `--include-volumes` | Include mounted-volume targets in the selected `trash`, `fsevents`, and `dsstore` modules |
 | `--include-extension-data` | Allow `browser` to remove shared website/extension storage; this can reset extension settings and sign-ins |
 | `--logs-older-than N` | Remove eligible closed legacy rotations, diagnostic reports, and BSM trails older than N days; requires `systemlogs` or `audit` and rejects `unified` |
@@ -119,11 +118,12 @@ it does not restrict cleanup to the supplied path. `--purge-snapshots` runs
 independently of module selection. See the sections below before enabling
 these options.
 
-`--logfile FILE` creates a new log with mode `0600` after confirmation. Existing
-files and symlink paths are refused. The parent directory must belong to the
-caller and must not allow group or other users to write or have a macOS ACL.
-With `sudo`, use a root-owned directory, such as `/var/log`.
-Dry-run and `--list` do not create logs.
+The script does not create an operation log. Progress, debug details, errors,
+and the summary use only standard output and standard error. `--logfile` is
+not supported and is rejected before cleanup. The script does not remove
+logs from earlier runs unless they are covered by the selected cleanup modules.
+The caller can still redirect output to a file. macOS, `sudo`, terminal session
+recording, and shell history can independently retain records of a run.
 
 ## Modules
 

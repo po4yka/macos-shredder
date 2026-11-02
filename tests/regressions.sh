@@ -224,68 +224,73 @@ test_trash_links() (
 test_trash_links
 printf 'PASS: Trash links are unlinked; targets and linked parents are protected\n'
 
-test_logfile_safety() (
-    setup_case logfile-safety
-    local logfile="$SANDBOX/operations.log" rc=0 mode
-    /bin/bash "$SHREDDER" --dry-run --modules shell --logfile "$logfile" >/dev/null 2>&1
-    [ ! -e "$logfile" ]
-    /bin/bash "$SHREDDER" --list --logfile "$logfile" >/dev/null 2>&1
-    [ ! -e "$logfile" ]
-    /bin/bash "$SHREDDER" --modules shell --logfile "$logfile" </dev/null >/dev/null 2>&1 || rc=$?
-    [ "$rc" -eq 1 ]
-    [ ! -e "$logfile" ]
-    /bin/bash "$SHREDDER" --force --modules shell --logfile "$logfile" >/dev/null 2>&1
-    grep -q 'logging started' "$logfile"
-    mode="$(stat -f '%Lp' "$logfile" 2>/dev/null)" || mode="$(stat -c '%a' "$logfile")"
-    [ "$mode" = 600 ]
-    cp "$logfile" "$WORK/log-before"
-    rc=0
-    /bin/bash "$SHREDDER" --force --modules shell --logfile "$logfile" >/dev/null 2>&1 || rc=$?
-    [ "$rc" -eq 1 ]
-    cmp -s "$WORK/log-before" "$logfile"
-    printf 'outside sentinel\n' > "$WORK/outside-log"
-    ln -s "$WORK/outside-log" "$SANDBOX/link.log"
-    rc=0
-    /bin/bash "$SHREDDER" --force --modules shell --logfile "$SANDBOX/link.log" >/dev/null 2>&1 || rc=$?
-    [ "$rc" -eq 1 ]
-    grep -q '^outside sentinel$' "$WORK/outside-log"
-    ln -s "$WORK/nonexistent-log" "$SANDBOX/dangling.log"
-    rc=0
-    /bin/bash "$SHREDDER" --force --modules shell --logfile "$SANDBOX/dangling.log" >/dev/null 2>&1 || rc=$?
-    [ "$rc" -eq 1 ]
-    [ ! -e "$WORK/nonexistent-log" ]
-    mkdir "$SANDBOX/open" "$WORK/log-outside-dir"
-    chmod 777 "$SANDBOX/open"
-    ln -s "$WORK/log-outside-dir" "$SANDBOX/linked-parent"
-    for logfile in "$SANDBOX/open/new.log" "$SANDBOX/linked-parent/new.log" "$WORK/outside-new.log"; do
+test_no_operation_logs() (
+    setup_case no-operation-logs
+    local logfile rc=0 mode option
+    local h="$USERS_DIR/alice"
+    mkdir -p "$h"
+    # Each mode must leave no files other than the marker and retained target.
+    for mode in dry-run debug list aborted real; do
+        printf 'cleanup target\n' > "$h/.DS_Store"
         rc=0
-        /bin/bash "$SHREDDER" --force --modules shell --logfile "$logfile" >/dev/null 2>&1 || rc=$?
-        [ "$rc" -eq 1 ]
-        [ ! -e "$logfile" ]
+        case "$mode" in
+            dry-run) /bin/bash "$SHREDDER" --dry-run --modules dsstore >/dev/null 2>&1 || rc=$? ;;
+            debug) /bin/bash "$SHREDDER" --force --debug --modules dsstore >/dev/null 2>&1 || rc=$? ;;
+            list) /bin/bash "$SHREDDER" --list >/dev/null 2>&1 || rc=$? ;;
+            aborted) /bin/bash "$SHREDDER" --modules dsstore </dev/null >/dev/null 2>&1 || rc=$? ;;
+            real) /bin/bash "$SHREDDER" --force --modules dsstore >/dev/null 2>&1 || rc=$? ;;
+        esac
+        if [ "$mode" = aborted ]; then
+            [ "$rc" -eq 1 ]
+        else
+            [ "$rc" -eq 0 ]
+        fi
+        case "$mode" in
+            debug|real) [ ! -e "$h/.DS_Store" ] ;;
+            *) grep -q '^cleanup target$' "$h/.DS_Store" ;;
+        esac
+        [ "$(find "$SANDBOX" -mindepth 1 ! -path "$USERS_DIR" ! -path "$h" \
+            ! -path "$h/.DS_Store" -print)" = "$SANDBOX/.macos-shredder-test-root" ]
     done
-    if [ "$(uname -s)" = Darwin ]; then
-        mkdir "$SANDBOX/acl-parent"
-        chmod +a 'everyone allow add_file' "$SANDBOX/acl-parent"
-        rc=0
-        /bin/bash "$SHREDDER" --force --modules shell --logfile "$SANDBOX/acl-parent/new.log" >/dev/null 2>&1 || rc=$?
-        [ "$rc" -eq 1 ]
-        [ ! -e "$SANDBOX/acl-parent/new.log" ]
-        chmod -N "$SANDBOX/acl-parent"
-    fi
-    # Inject a leaf replacement after the path check, during parent stat.
-    LOGFILE_ARG="$SANDBOX/raced.log"
-    # shellcheck disable=SC2329 # invoked by setup_logging
-    stat() {
-        [ -L "$SANDBOX/raced.log" ] || ln -s "$WORK/outside-log" "$SANDBOX/raced.log"
-        command stat "$@"
-    }
-    rc=0
-    (setup_logging) > "$WORK/raced-log-output" 2>&1 || rc=$?
-    [ "$rc" -eq 1 ]
-    grep -q '^outside sentinel$' "$WORK/outside-log"
+    # Both spellings of the removed option must fail before any cleanup,
+    # including dry-run and listing. Existing files must remain unchanged.
+    printf 'preserve target\n' > "$h/.DS_Store"
+    for mode in real dry-run list; do
+        for option in --logfile --logfile=; do
+            for logfile in "$SANDBOX/new.log" "$SANDBOX/existing.log"; do
+                printf 'preserve log\n' > "$SANDBOX/existing.log"
+                rc=0
+                set -- --force --modules dsstore
+                case "$mode" in dry-run) set -- "$@" --dry-run ;; list) set -- "$@" --list ;; esac
+                case "$option" in
+                    --logfile) set -- "$@" --logfile "$logfile" ;;
+                    *) set -- "$@" "--logfile=$logfile" ;;
+                esac
+                /bin/bash "$SHREDDER" "$@" >/dev/null 2>&1 || rc=$?
+                [ "$rc" -eq 64 ]
+                [ ! -e "$SANDBOX/new.log" ]
+                grep -q '^preserve log$' "$SANDBOX/existing.log"
+                grep -q '^preserve target$' "$h/.DS_Store"
+            done
+        done
+    done
+    # Console helpers and interrupt handling must not write to an inherited
+    # log descriptor, even if a caller exports the old logging variables.
+    # shellcheck disable=SC2094 # intentional: the inherited log must stay empty
+    (
+        export LOGFILE="$WORK/inherited.log" LOGFILE_ARG="$WORK/inherited.log"
+        # shellcheck disable=SC1090 # reload with legacy logging variables
+        source "$SHREDDER"
+        DEBUG=1
+        log_info info; log_ok ok; log_warn warn; log_error error; log_debug debug
+        warn_fda_missing
+        on_interrupt
+    ) 3> "$WORK/inherited.log" >/dev/null 2>&1 || rc=$?
+    [ "$rc" -eq 130 ]
+    [ ! -s "$WORK/inherited.log" ]
 )
-test_logfile_safety
-printf 'PASS: logs are private, new, contained, and created only after confirmation\n'
+test_no_operation_logs
+printf 'PASS: no operation logs; removed logfile options fail before cleanup\n'
 
 test_fixture_rebuild() (
     setup_case 'fixture rebuild'

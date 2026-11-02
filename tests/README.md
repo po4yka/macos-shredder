@@ -55,7 +55,7 @@ checkpoint truncation can complete.
 
 | File | Role |
 | --- | --- |
-| [regressions.sh](regressions.sh) | General cleanup, status, logfile, and fixture checks |
+| [regressions.sh](regressions.sh) | General cleanup, status, absence of operation logs, and fixture checks |
 | [ai-sessions.sh](ai-sessions.sh) | Agent sessions, databases, mixed JSON, derived data, and credentials |
 | [ai-editors.sh](ai-editors.sh) | Cursor, Windsurf, Continue, Cline/Roo, and Aider sessions |
 | [browser-stores.sh](browser-stores.sh) | Website storage, tab recovery, extension opt-in, and WAL handling |
@@ -180,7 +180,7 @@ remove it when finished. Never mark a real home or mounted volume as a sandbox.
 
 | Suite | Checks |
 | --- | --- |
-| General regressions | Failed traversal and snapshot listing, Wi-Fi stores, zsh sessions, log rotations, browser caches and sidecars, active browsers, Trash links, private logfiles, and three deterministic fixture rebuilds |
+| General regressions | Failed traversal and snapshot listing, Wi-Fi stores, zsh sessions, log rotations, browser caches and sidecars, active browsers, Trash links, absence of operation logs, rejection of the removed logfile option, and three deterministic fixture rebuilds |
 | AI sessions | Sessions, archives, indexes, desktop catalogs, mixed configuration/credential tables and JSON, optional derived data, custom roots, multiple users, repeated cleanup, unknown schemas, locks, links, Claude scratchpads, environment overrides, and failed-statement rollback |
 | AI editors | Named profiles, workspace databases and backups, binary secrets, approval settings, Cascade settings, extension configuration, Aider source/Git preservation, custom roots, malformed state, and recovery-copy refusal |
 | Browser stores | Chromium profiles, mixed-store opt-in, Firefox origin directories and SQLite metadata, retained extension state, Safari saved tab-group refusal, Safari cache-only roots, Brave process naming, process-query failures, symlinks, and a pinned WAL reader followed by successful retry |

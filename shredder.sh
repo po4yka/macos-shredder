@@ -81,8 +81,6 @@ TEST_MODE=0
 CLEANED_COUNT=0
 FAILED_COUNT=0
 
-LOGFILE=""
-LOGFILE_ARG=""
 MODULES_ARG=""
 SELECTED_MODULES=""
 
@@ -167,7 +165,7 @@ COLOR_BLUE=""
 COLOR_CYAN=""
 
 ###############################################################################
-# SECTION: Colors and logging
+# SECTION: Colors and console output
 ###############################################################################
 
 # Enable colors only for an interactive TTY that is not "dumb" and has not
@@ -184,39 +182,26 @@ setup_colors() {
     fi
 }
 
-# Append one timestamped line to fd 3 when --logfile was given.
-log_message() {
-    local level="$1"
-    shift
-    [ -n "$LOGFILE" ] || return 0
-    printf '%s [%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$level" "$*" >&3 2>/dev/null || true
-}
-
 # Console loggers write to stderr so their output can never pollute the
 # TAB-separated records produced by enumerate_users() inside process
 # substitutions.
 log_info() {
     printf '%b\n' "${COLOR_GREEN}[+]${COLOR_RESET} $*" >&2
-    log_message "INFO" "$*"
 }
 
 log_ok() {
     printf '%b\n' "${COLOR_GREEN}[ok]${COLOR_RESET} $*" >&2
-    log_message "OK" "$*"
 }
 
 log_warn() {
     printf '%b\n' "${COLOR_YELLOW}[!]${COLOR_RESET} $*" >&2
-    log_message "WARN" "$*"
 }
 
 log_error() {
     printf '%b\n' "${COLOR_RED}[x]${COLOR_RESET} $*" >&2
-    log_message "ERROR" "$*"
 }
 
 log_debug() {
-    log_message "DEBUG" "$*"
     [ "$DEBUG" -eq 1 ] || return 0
     printf '%b\n' "${COLOR_BLUE}[dbg]${COLOR_RESET} $*" >&2
 }
@@ -229,7 +214,6 @@ die() {
 # shellcheck disable=SC2329 # invoked by trap in main()
 on_interrupt() {
     printf '%b\n' "${COLOR_YELLOW}[!]${COLOR_RESET} interrupted by user; exiting" >&2
-    log_message "WARN" "interrupted by user"
     exit 130
 }
 
@@ -734,7 +718,6 @@ Options:
   -m, --modules IDS     Comma-separated module ids (default: standard modules).
                         See '--list' for valid ids; unknown ids are rejected.
   -f, --force           Do not ask for confirmation (auto-answer yes)
-      --logfile FILE    Create a new private operation log after confirmation
       --include-volumes Include mounted-volume Trash, FSEvents and .DS_Store
                         targets when their modules are selected
       --include-extension-data
@@ -883,20 +866,6 @@ parse_args() {
                 fi
                 shift
                 ;;
-            --logfile)
-                if [ $# -lt 2 ]; then
-                    usage_error "option '--logfile' requires an argument"
-                fi
-                LOGFILE_ARG="$2"
-                shift 2
-                ;;
-            --logfile=*)
-                LOGFILE_ARG="${1#*=}"
-                if [ -z "$LOGFILE_ARG" ]; then
-                    usage_error "option '--logfile' requires a non-empty argument"
-                fi
-                shift
-                ;;
             --logs-older-than)
                 [ $# -ge 2 ] || usage_error "--logs-older-than requires days"
                 LOGS_OLDER_THAN="$2"; shift 2
@@ -991,76 +960,6 @@ parse_args() {
     fi
 }
 
-setup_logging() {
-    [ -n "$LOGFILE_ARG" ] || return 0
-    if [ "$DRY_RUN" -eq 1 ]; then
-        log_debug "[DRY RUN] logfile creation skipped: $LOGFILE_ARG"
-        return 0
-    fi
-    local target="$LOGFILE_ARG" part parent cursor previous_dir details owner mode
-    local old_umask had_noclobber=0 parts=() kernel acl
-    case "$target" in
-        *$'\n'*) die "logfile paths cannot contain newlines" ;;
-        /*) ;;
-        *) target="$(pwd -P)/$target" ;;
-    esac
-    IFS='/' read -r -a parts <<< "$target"
-    target=""
-    for part in "${parts[@]}"; do
-        case "$part" in
-            ''|.) continue ;;
-            ..) die "logfile paths cannot contain '..'" ;;
-        esac
-        target="$target/$part"
-    done
-    # These are standard, root-controlled macOS aliases. Other symlinks are refused.
-    kernel="$(uname -s)"
-    if [ "$kernel" = Darwin ]; then
-        case "$target" in /var/*|/tmp/*|/etc/*) target="/private$target" ;; esac
-    fi
-    [ -n "$target" ] || die "logfile must name a new file"
-    guard_mutation_target "$target" || die "unsafe logfile path: $target"
-    [ ! -e "$target" ] && [ ! -L "$target" ] || die "logfile already exists: $target"
-    parent="${target%/*}"
-    parent="${parent:-/}"
-    cursor="$parent"
-    while [ "$cursor" != / ]; do
-        [ ! -L "$cursor" ] || die "logfile parent is a symlink: $cursor"
-        cursor="${cursor%/*}"
-        cursor="${cursor:-/}"
-    done
-    previous_dir="$(pwd -P)"
-    cd -P "$parent" || die "cannot open logfile parent: $parent"
-    [ "$(pwd -P)" = "$parent" ] || die "logfile parent changed: $parent"
-    # Check the pinned directory, not the pathname. An unprivileged process
-    # must not be able to replace the leaf between validation and opening.
-    details="$(stat -f '%u %Lp' . 2>/dev/null)" \
-        || details="$(stat -c '%u %a' . 2>/dev/null)" \
-        || die "cannot inspect logfile parent: $parent"
-    read -r owner mode <<< "$details"
-    case "$mode" in ''|*[!0-7]*) die "invalid logfile parent permissions" ;; esac
-    if [ "$owner" != "$(id -u)" ] || [ "$((8#$mode & 022))" -ne 0 ]; then
-        die "logfile parent must belong to the caller and forbid group/other writes: $parent"
-    fi
-    if [ "$kernel" = Darwin ]; then
-        # macOS ACL grants are independent of the POSIX mode bits.
-        acl="$(/bin/ls -lde .)" || die "cannot inspect logfile parent ACL"
-        case "$acl" in *$'\n'*) die "logfile parent must not have an extended ACL: $parent" ;; esac
-    fi
-    old_umask="$(umask)"
-    case "$-" in *C*) had_noclobber=1 ;; esac
-    umask 077
-    set -C
-    if ! { exec 3> "./${target##*/}"; } 2>/dev/null; then
-        die "cannot create new logfile: $target"
-    fi
-    [ "$had_noclobber" -eq 1 ] || set +C
-    umask "$old_umask"
-    cd "$previous_dir" || die "cannot restore working directory"
-    LOGFILE="$target"
-    log_message "INFO" "logging started ($SCRIPT_NAME v$VERSION)"
-}
-
 ###############################################################################
 # SECTION: Privilege check, FDA probe and confirmation
 ###############################################################################
@@ -1103,7 +1002,6 @@ warn_fda_missing() {
     printf '%b\n' "${COLOR_RED}  Grant access under: System Settings > Privacy & Security >${COLOR_RESET}" >&2
     printf '%b\n' "${COLOR_RED}  Full Disk Access (for your terminal or invoking program).${COLOR_RESET}" >&2
     printf '%b\n' "${COLOR_RED}==================================================================${COLOR_RESET}" >&2
-    log_message "WARN" "Full Disk Access probe failed; protected paths may be skipped"
 }
 
 confirm_action() {
@@ -3869,7 +3767,7 @@ finder_history_plist() {
         log_warn "finderhistory: native plutil and defaults are required; retaining: $file"
         FAILED_COUNT=$((FAILED_COUNT + 1)); return 0
     fi
-    # No preference values are printed or copied into the operation log.
+    # No preference values are printed.
     # shellcheck disable=SC2016
     if result="$(run_target_command "$file" /bin/sh -c '
         file=$1; specs=$2; parent=${file%/*}; entry=${file##*/}
@@ -4271,8 +4169,6 @@ main() {
             die "aborted by user"
         fi
     fi
-
-    setup_logging
 
     if [ "$PURGE_SNAPSHOTS" -eq 1 ]; then
         log_info "purging local APFS snapshots (--purge-snapshots)"
