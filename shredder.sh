@@ -54,6 +54,9 @@ FORCE=0
 LIST_ONLY=0
 INCLUDE_VOLUMES=0
 PURGE_SNAPSHOTS=0
+AI_DERIVED=0
+AI_ROOTS=()
+AI_CLAUDE_TMP_BASE=/private/tmp
 TEST_MODE=0
 
 CLEANED_COUNT=0
@@ -93,6 +96,7 @@ MODULE_IDS=(
     wifi
     brew
     apps
+    ai
 )
 MODULE_DESCS=(
     "Shell and REPL histories, session data"
@@ -109,6 +113,7 @@ MODULE_DESCS=(
     "Wi-Fi known networks and logs"
     "Homebrew caches and logs"
     "App caches and saved window states"
+    "Claude Code, Codex and OpenCode local sessions"
 )
 
 # Color codes; filled by setup_colors(), left empty when colors are disabled.
@@ -646,6 +651,12 @@ Options:
       --logfile FILE    Create a new private operation log after confirmation
       --include-volumes Also process mounted volumes under /Volumes
       --purge-snapshots Delete APFS Time Machine local snapshots before modules
+      --ai-derived     Also remove AI memory, plans and generated artifacts
+      --ai-root KIND=PATH
+                        Add an AI storage location below /Users/<user>/.
+                        Kinds: claude, codex, codex-db, opencode,
+                        opencode-state, opencode-db, claude-temp.
+                        Repeat for multiple locations; defaults are also cleaned.
 
 Environment:
   SHREDDER_ROOT         When set, every filesystem target is rooted under this
@@ -772,6 +783,19 @@ parse_args() {
                 ;;
             --purge-snapshots)
                 PURGE_SNAPSHOTS=1
+                shift
+                ;;
+            --ai-derived)
+                AI_DERIVED=1
+                shift
+                ;;
+            --ai-root)
+                [ $# -ge 2 ] || usage_error "--ai-root requires KIND=PATH"
+                add_ai_root "$2"
+                shift 2
+                ;;
+            --ai-root=*)
+                add_ai_root "${1#*=}"
                 shift
                 ;;
             --)
@@ -1595,6 +1619,483 @@ module_apps() {
 }
 
 ###############################################################################
+# --- module: ai ---------------------------------------------------------------
+
+# Explicit roots are additive. Keep custom paths within the existing home-owner
+# security boundary; never evaluate shell configuration to discover a path.
+add_ai_root() {
+    local kind="${1%%=*}" path="${1#*=}" relative
+    case "$kind" in
+        claude|codex|codex-db|opencode|opencode-state|opencode-db|claude-temp) ;;
+        *) usage_error "unknown AI root kind: $kind" ;;
+    esac
+    path="${path%/}"
+    case "$path" in
+        /Users/*/*) ;;
+        *) usage_error "AI roots must be below /Users/<user>/: $path" ;;
+    esac
+    case "$path/" in
+        *'/../'*|*'/./'*|*'//'*) usage_error "AI root must be a normalized absolute path" ;;
+    esac
+    case "$path" in
+        *$'\n'*|*$'\r'*|*$'\t'*) usage_error "AI root must not contain control whitespace" ;;
+    esac
+    relative="${path#/Users/}"
+    [ -n "${relative#*/}" ] || usage_error "AI root cannot be a user home"
+    AI_ROOTS[${#AI_ROOTS[@]}]="$kind=$path"
+}
+
+ai_environment_roots() {
+    [ "$TEST_MODE" -eq 0 ] || return 0
+    [ -z "${CLAUDE_CONFIG_DIR:-}" ] || add_ai_root "claude=$CLAUDE_CONFIG_DIR"
+    [ -z "${CODEX_HOME:-}" ] || add_ai_root "codex=$CODEX_HOME"
+    [ -z "${CODEX_SQLITE_HOME:-}" ] || add_ai_root "codex-db=$CODEX_SQLITE_HOME"
+    [ -z "${XDG_DATA_HOME:-}" ] || add_ai_root "opencode=${XDG_DATA_HOME%/}/opencode"
+    [ -z "${XDG_STATE_HOME:-}" ] || add_ai_root "opencode-state=${XDG_STATE_HOME%/}/opencode"
+    AI_CLAUDE_TMP_BASE="${CLAUDE_CODE_TMPDIR:-/private/tmp}"
+    AI_CLAUDE_TMP_BASE="${AI_CLAUDE_TMP_BASE%/}"
+    case "$AI_CLAUDE_TMP_BASE" in
+        /tmp|/tmp/*) AI_CLAUDE_TMP_BASE="/private$AI_CLAUDE_TMP_BASE" ;;
+    esac
+    case "$AI_CLAUDE_TMP_BASE/" in
+        *'/../'*|*'/./'*|*'//'*) usage_error "CLAUDE_CODE_TMPDIR must be normalized" ;;
+    esac
+    case "$AI_CLAUDE_TMP_BASE" in
+        *$'\n'*|*$'\r'*|*$'\t'*) usage_error "CLAUDE_CODE_TMPDIR must not contain control whitespace" ;;
+    esac
+    case "$AI_CLAUDE_TMP_BASE" in
+        /private/tmp|/private/tmp/*|/private/var/folders/*|/Users/*/*) ;;
+        *) usage_error "unsupported CLAUDE_CODE_TMPDIR; use a home or macOS temp directory" ;;
+    esac
+    if [ -n "${OPENCODE_DB:-}" ] && [ "$OPENCODE_DB" != :memory: ]; then
+        case "$OPENCODE_DB" in
+            /*) add_ai_root "opencode-db=$OPENCODE_DB" ;;
+            *) add_ai_root "opencode-db=${XDG_DATA_HOME:-${HOME}/.local/share}/opencode/$OPENCODE_DB" ;;
+        esac
+    fi
+}
+
+# Fail closed on a failed process query. Do not print command lines: they may
+# contain prompts or tokens. Node CLI launchers and desktop helpers also match.
+ai_agents_stopped() {
+    [ "$TEST_MODE" -eq 0 ] || return 0
+    local processes
+    if ! processes="$(ps -axo command= 2>/dev/null)"; then
+        log_warn "ai: cannot inspect running processes; cleanup refused"
+        return 1
+    fi
+    if printf '%s\n' "$processes" | grep -Ei '(^|[ /])(claude|codex|opencode)([[:space:]/]|$|\.js([[:space:]]|$))|/(Codex|Claude|OpenCode)\.app/' >/dev/null; then
+        log_warn "ai: close Claude Code, Codex, OpenCode and their background servers first"
+        return 1
+    fi
+    return 0
+}
+
+# SQLite runs as the home owner, from a checked physical parent. Reject links
+# and hard links for the database AND sidecars before SQLite can open them.
+ai_sqlite_command() {
+    local db="$1" sqlite_bin="$2"
+    shift 2
+    # shellcheck disable=SC2016
+    run_target_command "$db" /bin/sh -c '
+        db=$1; sqlite=$2; shift 2
+        cd -P "${db%/*}" || exit 1
+        [ "$(pwd -P)" = "${db%/*}" ] || exit 1
+        file=./${db##*/}
+        [ -f "$file" ] || exit 1
+        for suffix in "" -wal -shm -journal; do
+            p=$file$suffix
+            [ ! -L "$p" ] || exit 1
+            [ -e "$p" ] || continue
+            [ -f "$p" ] || exit 1
+            links=$(stat -f %l "$p" 2>/dev/null) || links=$(stat -c %h "$p") || exit 1
+            [ "$links" = 1 ] || exit 1
+        done
+        exec "$sqlite" -batch -bail -noheader -init /dev/null "$file" "$@"
+    ' sh "$db" "$sqlite_bin" "$@"
+}
+
+# Only known tables are accepted. Mixed databases retain configuration and
+# credentials. Unknown tables/triggers fail before DELETE. No fallback to rm.
+ai_purge_database() {
+    local db="$1" flavor="$2" mode="${3:-clean}" deletes keeps anchor
+    local tables table sql allowed="" sqlite_bin version count=0 checkpoint
+    guard_mutation_target "$db" || return 1
+    [ -e "$db" ] || return 0
+    case "$flavor" in
+        state)
+            anchor=threads
+            deletes='threads thread_dynamic_tools thread_spawn_edges thread_attachments guardian_review_feedback thread_read_receipts backfill_state rollout_migration_state rollout_migration_skipped_rollouts'
+            keeps='_sqlx_migrations projects project_roots project_idempotency_keys thread_sections remote_control_enrollments external_agent_config_imports'
+            ;;
+        history)
+            anchor=thread_items
+            deletes='thread_items thread_turns thread_history_projection_state thread_realtime_items'
+            keeps=_sqlx_migrations ;;
+        logs) anchor=logs; deletes=logs; keeps='_sqlx_migrations sqlite_sequence' ;;
+        goals) anchor=thread_goals; deletes='thread_goals thread_goal_continuation_deferrals'; keeps=_sqlx_migrations ;;
+        queue) anchor=queued_items; deletes='queued_items queued_thread_revisions'; keeps='_sqlx_migrations sqlite_sequence' ;;
+        memory) anchor=stage1_outputs; deletes='stage1_outputs jobs consolidation_progress'; keeps=_sqlx_migrations ;;
+        summaries) anchor=thread_turn_summaries; deletes=thread_turn_summaries; keeps='' ;;
+        desktop)
+            anchor=automation_runs
+            deletes='inbox_items automation_runs local_thread_catalog local_thread_catalog_sync_state local_thread_catalog_metadata local_thread_catalog_scan_checkpoints local_thread_catalog_scan_entries thread_timeline_ledger live_visualization_suggestions active_chat_turns'
+            keeps='automations local_app_server_feature_enablement local_thread_catalog_hosts codex_schema_migrations'
+            ;;
+        opencode)
+            anchor='session session_v2'
+            deletes='session message part todo session_share session_v2 session_message session_part session_inbox instruction_entry instruction_state instruction_blob blob_ref blob job'
+            keeps='__drizzle_migrations migration project project_directory worktree workspace account account_state control_account credential permission kv schedule event event_sequence'
+            ;;
+        *) log_warn "ai: unsupported database: $db"; return 1 ;;
+    esac
+    # Opening a WAL database can create SHM files even for a read-only query.
+    # Dry-run must not open SQLite at all.
+    if [ "$DRY_RUN" -eq 1 ]; then
+        if [ "$mode" = clean ]; then
+            log_debug "[DRY RUN] would clear known session tables (schema checked on real run): $db"
+            CLEANED_COUNT=$((CLEANED_COUNT + 1))
+        fi
+        return 0
+    fi
+    sqlite_bin="$(command -v sqlite3 2>/dev/null || true)"
+    if [ -z "$sqlite_bin" ]; then
+        log_warn "ai: sqlite3 required; database retained: $db"
+        return 1
+    fi
+    if ! tables="$(ai_sqlite_command "$db" "$sqlite_bin" "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;" 2>/dev/null)"; then
+        log_warn "ai: cannot read database safely: $db"
+        return 1
+    fi
+    for table in $anchor; do
+        case $'\n'"$tables"$'\n' in *$'\n'"$table"$'\n'*) count=$((count + 1)) ;; esac
+    done
+    if [ "$count" -eq 0 ]; then
+        log_warn "ai: unrecognized database schema: $db"
+        return 1
+    fi
+    while IFS= read -r table; do
+        case " $deletes $keeps " in
+            *" $table "*) ;;
+            *) log_warn "ai: unsupported database table; database retained: $db"; return 1 ;;
+        esac
+    done <<< "$tables"
+    for table in $deletes $keeps; do allowed="${allowed:+$allowed,}'$table'"; done
+    version="$(ai_sqlite_command "$db" "$sqlite_bin" 'PRAGMA schema_version;' 2>/dev/null)" || return 1
+    case "$version" in ''|*[!0-9]*) return 1 ;; esac
+    # The checks run again under a write lock. Disable cascades so new foreign
+    # keys cannot delete preserved settings. All session tables are explicit.
+    sql="PRAGMA trusted_schema=OFF; PRAGMA foreign_keys=OFF; PRAGMA secure_delete=ON;
+BEGIN IMMEDIATE;
+CREATE TEMP TABLE shredder_check (ok INTEGER CHECK (ok=1));
+INSERT INTO shredder_check SELECT schema_version=$version FROM pragma_schema_version;
+INSERT INTO shredder_check SELECT COUNT(*)=0 FROM sqlite_master WHERE type='trigger' OR (type='table' AND name NOT IN ($allowed));"
+    if [ "$mode" = clean ]; then
+        if [ "$flavor" = opencode ]; then
+            sql="$sql CREATE TEMP TABLE shredder_sessions(id TEXT);"
+            for table in session session_v2; do
+                case $'\n'"$tables"$'\n' in
+                    *$'\n'"$table"$'\n'*) sql="$sql INSERT INTO shredder_sessions SELECT id FROM \"$table\";" ;;
+                esac
+            done
+            # The event store can also contain non-session aggregates. Preserve
+            # those; include orphan session aggregates left by earlier cleanup.
+            for table in event event_sequence; do
+                case $'\n'"$tables"$'\n' in
+                    *$'\n'"$table"$'\n'*) sql="$sql DELETE FROM \"$table\" WHERE aggregate_id IN (SELECT id FROM shredder_sessions) OR aggregate_id GLOB 'ses_*';" ;;
+                esac
+            done
+            sql="$sql DROP TABLE shredder_sessions;"
+        fi
+        for table in $deletes; do
+            case $'\n'"$tables"$'\n' in
+                *$'\n'"$table"$'\n'*) sql="$sql DELETE FROM \"$table\"; INSERT INTO shredder_check SELECT COUNT(*)=0 FROM \"$table\";" ;;
+            esac
+        done
+        # Standalone schedules are user configuration; session schedules would
+        # otherwise recreate work for deleted chats.
+        if [ "$flavor" = opencode ]; then
+            case $'\n'"$tables"$'\n' in
+                *$'\n'schedule$'\n'*) sql="$sql DELETE FROM schedule WHERE session_id IS NOT NULL;" ;;
+            esac
+        fi
+    fi
+    sql="$sql DROP TABLE shredder_check; COMMIT;"
+    if ! ai_sqlite_command "$db" "$sqlite_bin" "$sql" >/dev/null 2>&1; then
+        log_warn "ai: database transaction refused or failed: $db"
+        return 1
+    fi
+    [ "$mode" = clean ] || return 0
+    # Compact freed pages and drain WAL through SQLite, never unlink a live WAL.
+    if ! ai_sqlite_command "$db" "$sqlite_bin" 'VACUUM;' >/dev/null 2>&1; then
+        log_warn "ai: database compaction failed: $db"
+        return 1
+    fi
+    checkpoint="$(ai_sqlite_command "$db" "$sqlite_bin" 'PRAGMA wal_checkpoint(TRUNCATE);' 2>/dev/null)" || return 1
+    case "$checkpoint" in 0\|*) ;; *) log_warn "ai: database checkpoint is busy: $db"; return 1 ;; esac
+    CLEANED_COUNT=$((CLEANED_COUNT + 1))
+    log_debug "cleared session tables: $db"
+}
+
+ai_database_flavor() {
+    case "${1##*/}" in
+        state_[0-9]*.sqlite) printf state ;;
+        thread_history_[0-9]*.sqlite) printf history ;;
+        logs_[0-9]*.sqlite) printf logs ;;
+        goals_[0-9]*.sqlite) printf goals ;;
+        queue_[0-9]*.sqlite) printf queue ;;
+        memories_[0-9]*.sqlite|memories_v2_[0-9]*.sqlite) printf memory ;;
+        codex-thread-summaries*.db) printf summaries ;;
+        codex.db|codex-dev.db) printf desktop ;;
+        opencode.db|opencode-*.db) printf opencode ;;
+        *) return 1 ;;
+    esac
+}
+
+ai_databases_in() {
+    local root="$1" kind="$2" mode="$3" db flavor before="$FAILED_COUNT"
+    guard_mutation_target "$root" || return 1
+    [ -d "$root" ] || return 0
+    while read_find_path db; do
+        case "$db" in
+            *-wal|*-shm|*-journal)
+                if [ ! -f "${db%-*}" ]; then
+                    log_warn "ai: orphan database sidecar retained for recovery: $db"
+                    FAILED_COUNT=$((FAILED_COUNT + 1))
+                fi
+                continue ;;
+        esac
+        if ! flavor="$(ai_database_flavor "$db")"; then
+            log_warn "ai: unknown database retained: $db"
+            FAILED_COUNT=$((FAILED_COUNT + 1))
+            continue
+        fi
+        if [ "$kind" = opencode ] && [ "$flavor" != opencode ]; then
+            log_warn "ai: unexpected database retained: $db"
+            FAILED_COUNT=$((FAILED_COUNT + 1))
+            continue
+        fi
+        [ "$flavor" != memory ] || [ "$AI_DERIVED" -eq 1 ] || continue
+        if ! ai_purge_database "$db" "$flavor" "$mode"; then
+            FAILED_COUNT=$((FAILED_COUNT + 1))
+        fi
+    done < <(find_checked "$root" -mindepth 1 -maxdepth 1 \( -name '*.sqlite' -o -name '*.db' \
+        -o -name '*.sqlite-wal' -o -name '*.sqlite-shm' -o -name '*.sqlite-journal' \
+        -o -name '*.db-wal' -o -name '*.db-shm' -o -name '*.db-journal' \) -print0)
+    [ "$FAILED_COUNT" -eq "$before" ]
+}
+
+ai_remove_list() {
+    local root="$1" item
+    shift
+    for item in "$@"; do remove_path "$root/$item"; done
+}
+
+# Mixed JSON stores contain prompt history beside preferences. Use SQLite JSON
+# functions (already required for AI databases), not a new runtime dependency.
+ai_clean_json() {
+    local file="$1" flavor="$2" hex sqlite_bin sql value_json
+    guard_mutation_target "$file" || return 0
+    [ -e "$file" ] || return 0
+    if [ ! -f "$file" ]; then
+        log_warn "ai: expected a JSON state file: $file"
+        FAILED_COUNT=$((FAILED_COUNT + 1))
+        return 0
+    fi
+    if [ "$DRY_RUN" -eq 1 ]; then
+        log_debug "[DRY RUN] would remove session fields from: $file"
+        CLEANED_COUNT=$((CLEANED_COUNT + 1))
+        return 0
+    fi
+    sqlite_bin="$(command -v sqlite3 2>/dev/null || true)"
+    [ -n "$sqlite_bin" ] || { log_warn "ai: sqlite3 required for JSON cleanup: $file"; FAILED_COUNT=$((FAILED_COUNT + 1)); return 0; }
+    hex="$(printf '%s' "${file##*/}" | od -An -v -tx1 | tr -d ' \n')"
+    # Rebuild each object once instead of copying the entire document for each
+    # thread key. Explicit types preserve booleans, nulls, arrays and strings.
+    value_json="json(CASE type WHEN 'text' THEN json_quote(value) WHEN 'true' THEN 'true' WHEN 'false' THEN 'false' WHEN 'null' THEN 'null' ELSE value END)"
+    sql="WITH input(doc) AS (SELECT CAST(readfile(CAST(X'$hex' AS TEXT)) AS TEXT)),
+original(doc) AS (SELECT CASE WHEN json_type(doc)='object' THEN json(doc) ELSE json('unsupported state shape') END FROM input)"
+    case "$flavor" in
+        codex)
+            sql="$sql, atoms(doc) AS (SELECT CASE WHEN json_type(doc,'$.\"electron-persisted-atom-state\"')='object'
+THEN json_set(doc,'$.\"electron-persisted-atom-state\"',json((SELECT json_group_object(key,$value_json) FROM json_each(doc,'$.\"electron-persisted-atom-state\"') WHERE key NOT GLOB 'thread-*' AND key NOT IN ('prompt-history','composer-prompt-drafts-v1','heartbeat-thread-permissions-by-id')))) ELSE doc END FROM original)
+SELECT json_group_object(key,$value_json) FROM atoms,json_each(doc) WHERE key NOT GLOB 'thread-*' AND key NOT IN ('prompt-history','composer-prompt-drafts-v1','heartbeat-thread-permissions-by-id');"
+            ;;
+        claude)
+            sql="$sql SELECT CASE WHEN json_type(doc,'$.projects')='object' THEN
+json_set(json_remove(doc,'$.history','$.lastSessionId'),'$.projects',json((SELECT json_group_object(key,json_remove($value_json,'$.history','$.lastSessionId')) FROM json_each(doc,'$.projects'))))
+ELSE json_remove(doc,'$.history','$.lastSessionId') END FROM original;"
+            ;;
+        *) return 1 ;;
+    esac
+    # shellcheck disable=SC2016
+    if run_target_command "$file" /bin/sh -c '
+        file=$1; sqlite=$2; sql=$3
+        cd -P "${file%/*}" || exit 1
+        [ "$(pwd -P)" = "${file%/*}" ] || exit 1
+        file=./${file##*/}
+        [ -f "$file" ] && [ ! -L "$file" ] || exit 1
+        links=$(stat -f %l "$file" 2>/dev/null) || links=$(stat -c %h "$file") || exit 1
+        [ "$links" = 1 ] || exit 1
+        umask 077
+        tmp=$(mktemp ./.shredder-json.XXXXXX) || exit 1
+        trap '\''rm -f -- "$tmp"'\'' EXIT HUP INT TERM
+        "$sqlite" -batch -bail -init /dev/null :memory: "$sql" > "$tmp" || exit 1
+        [ -s "$tmp" ] || exit 1
+        mv -f -- "$tmp" "$file"
+    ' sh "$file" "$sqlite_bin" "$sql" >/dev/null 2>&1; then
+        CLEANED_COUNT=$((CLEANED_COUNT + 1))
+    else
+        log_warn "ai: JSON cleanup failed; original retained: $file"
+        FAILED_COUNT=$((FAILED_COUNT + 1))
+    fi
+}
+ai_clean_root() {
+    local kind="$1" root="$2" project entry phase
+    guard_mutation_target "$root" || return 0
+    [ -e "$root" ] || return 0
+    if [ "$kind" != opencode-db ] && [ ! -d "$root" ]; then
+        log_warn "ai: expected a storage directory: $root"
+        FAILED_COUNT=$((FAILED_COUNT + 1))
+        return 0
+    fi
+    case "$kind" in
+        codex|codex-db|opencode)
+            # Preflight all known databases in this root before any data cleanup.
+            for phase in check clean; do
+                ai_databases_in "$root" "$kind" "$phase" || return 0
+                if [ "$kind" = codex ]; then
+                    ai_databases_in "$root/sqlite" "$kind" "$phase" || return 0
+                fi
+            done
+            ;;
+        opencode-db)
+            if ! ai_purge_database "$root" opencode; then FAILED_COUNT=$((FAILED_COUNT + 1)); fi
+            return 0 ;;
+    esac
+    case "$kind" in
+        claude)
+            guard_mutation_target "$root/projects" || return 0
+            while read_find_path project; do
+                guard_mutation_target "$project" || continue
+                [ -d "$project" ] || continue
+                while read_find_path entry; do
+                    case "${entry##*/}" in
+                        memory) [ "$AI_DERIVED" -eq 1 ] || continue ;;
+                        *.jsonl|*.jsonl.*|sessions-index.json|????????-????-????-????-????????????) ;;
+                        *) continue ;;
+                    esac
+                    remove_path "$entry"
+                done < <(find_checked "$project" -mindepth 1 -maxdepth 1 -print0)
+            done < <(find_checked "$root/projects" -mindepth 1 -maxdepth 1 -print0)
+            ai_remove_list "$root" history.jsonl file-history debug logs paste-cache image-cache uploads \
+                session-env shell-snapshots tasks teams sessions transcripts feedback-bundles stats-cache.json jobs
+            ai_clean_json "$root/.claude.json" claude
+            while read_find_path entry; do ai_clean_json "$entry" claude; done < <(
+                find_checked "$root/backups" -mindepth 1 -maxdepth 1 -name '*.json*' -print0)
+            if [ "$AI_DERIVED" -eq 1 ]; then ai_remove_list "$root" plans agent-memory; fi
+            ;;
+        codex)
+            ai_remove_list "$root" sessions archived_sessions history.jsonl session_index.jsonl \
+                shell_snapshots log attachments transcription-history.jsonl dictation-history
+            while read_find_path entry; do ai_clean_json "$entry" codex; done < <(
+                find_checked "$root" -mindepth 1 -maxdepth 1 \( -name '.codex-global-state.json*' -o -name '..codex-global-state.json.tmp-*' \) -print0)
+            if [ "$AI_DERIVED" -eq 1 ]; then
+                ai_remove_list "$root" memories memories_v2 plans artifacts generated_images visualizations
+                while read_find_path entry; do remove_path "$entry"; done < <(
+                    find_checked "$root" -maxdepth 1 -type f \( -name 'memories*.tgz' -o -name 'memories*.tar.gz' \) -print0)
+            fi
+            ;;
+        opencode)
+            ai_remove_list "$root" log snapshot tool-output
+            # Legacy JSON stores share their parent with project configuration.
+            ai_remove_list "$root/storage" session message part session_diff todo session_share
+            ;;
+        opencode-state) ai_remove_list "$root" prompt-history.jsonl session.json ;;
+        claude-temp) clear_dir_contents "$root" ;;
+    esac
+    return 0
+}
+
+# macOS Claude scratchpads live outside the home. Only enter the exact UID tree
+# as that home's owner; a link, wrong owner or renamed parent is refused.
+ai_claude_temp() {
+    local home="$1" uid="$2" root
+    case "$uid" in
+        ''|*[!0-9]*)
+            uid="$(stat -f %u "$home" 2>/dev/null)" || uid="$(stat -c %u "$home" 2>/dev/null)" || uid=''
+            ;;
+    esac
+    case "$uid" in
+        ''|*[!0-9]*) log_warn "ai: cannot determine scratchpad owner: $home"; FAILED_COUNT=$((FAILED_COUNT + 1)); return 0 ;;
+    esac
+    root="$SANDBOX$AI_CLAUDE_TMP_BASE/claude-$uid"
+    [ -e "$root" ] || [ -L "$root" ] || return 0
+    guard_mutation_target "$root" || return 0
+    if [ "$DRY_RUN" -eq 1 ]; then
+        log_debug "[DRY RUN] would clear Claude scratchpads: $root"
+        CLEANED_COUNT=$((CLEANED_COUNT + 1))
+        return 0
+    fi
+    # shellcheck disable=SC2016
+    if run_target_command "$home/.claude" /bin/sh -c '
+        [ ! -L "$1" ] || exit 1
+        cd -P "$1" || exit 1
+        [ "$(pwd -P)" = "$1" ] || exit 1
+        owner=$(stat -f %u . 2>/dev/null) || owner=$(stat -c %u .) || exit 1
+        [ "$owner" = "$(id -u)" ] || exit 1
+        find . -mindepth 1 -maxdepth 1 -exec /bin/rm -rf -- {} +
+    ' sh "$root" >/dev/null 2>&1; then
+        CLEANED_COUNT=$((CLEANED_COUNT + 1))
+    else
+        log_warn "ai: scratchpad cleanup refused or failed: $root"
+        FAILED_COUNT=$((FAILED_COUNT + 1))
+    fi
+}
+
+module_ai() {
+    local u h uid item path kind matched processed=''
+    if ! ai_agents_stopped; then
+        if [ "$DRY_RUN" -eq 0 ]; then
+            FAILED_COUNT=$((FAILED_COUNT + 1))
+            return 0
+        fi
+    fi
+    log_info "ai: local sessions only; credentials, settings and working trees are preserved"
+    [ "$AI_DERIVED" -eq 1 ] || log_info "ai: memory, plans and generated artifacts are preserved (use --ai-derived to include them)"
+    while IFS=$'\t' read -r u h uid; do
+        [ -d "$h" ] || continue
+        ai_clean_root claude "$h/.claude"
+        ai_clean_json "$h/.claude.json" claude
+        while read_find_path path; do ai_clean_json "$path" claude; done < <(
+            find_checked "$h" -mindepth 1 -maxdepth 1 -name '.claude.json.backup*' -print0)
+        ai_clean_root codex "$h/.codex"
+        ai_clean_root opencode "$h/.local/share/opencode"
+        ai_clean_root opencode-state "$h/.local/state/opencode"
+        clear_dir_contents "$h/Library/Logs/com.openai.codex"
+        ai_claude_temp "$h" "$uid"
+        for item in "${AI_ROOTS[@]:-}"; do
+            [ -n "$item" ] || continue
+            kind="${item%%=*}"; path="$SANDBOX${item#*=}"
+            case "$path" in "$h"/*) ;; *) continue ;; esac
+            ai_clean_root "$kind" "$path"
+            processed="$processed
+$item"
+        done
+    done < <(enumerate_users)
+    for item in "${AI_ROOTS[@]:-}"; do
+        [ -n "$item" ] || continue
+        matched=0
+        while IFS= read -r path; do [ "$path" != "$item" ] || matched=1; done <<< "$processed"
+        if [ "$matched" -eq 0 ]; then
+            log_warn "ai: custom root has no eligible user home: ${item#*=}"
+            FAILED_COUNT=$((FAILED_COUNT + 1))
+        fi
+    done
+    return 0
+}
+
+###############################################################################
 # SECTION: Dispatch, summary and main flow
 ###############################################################################
 
@@ -1622,6 +2123,7 @@ run_module() {
         wifi)        module_wifi ;;
         brew)        module_brew ;;
         apps)        module_apps ;;
+        ai)          module_ai ;;
         *)
             log_warn "unknown module id in dispatch: $1"
             ;;
@@ -1687,6 +2189,7 @@ main() {
 
     print_banner
     detect_environment
+    if module_selected ai; then ai_environment_roots; fi
     print_warning_banner
     check_privileges
 

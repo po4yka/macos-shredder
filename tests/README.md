@@ -11,6 +11,7 @@ Files:
 | ---------------------- | ----------------------------------------------------------- |
 | `run-tests.sh`         | orchestrator — runs phases A–O, reports PASS/FAIL per phase |
 | `regressions.sh`       | additional cleanup, status, and logfile safety checks |
+| `ai-sessions.sh`       | AI session cleanup, database safety, and preservation checks |
 | `create-artifacts.sh`  | builds the deterministic sandbox fixture tree (+ manifest)  |
 | `verify-cleanup.sh`    | asserts post-cleaning state (`force`) or byte-stability (`dryrun`) |
 | `README.md`            | this document                                               |
@@ -90,7 +91,7 @@ Exit codes: `run-tests.sh` → `0` all phases passed, `1` any phase failed,
 
 - **A — usage validation**: `--modules bogus_definitely_invalid` must exit
   `64` and print valid module ids → strict exact-match CLI validation.
-- **B — module listing**: `--list` exits `0` and prints all 14 module ids.
+- **B — module listing**: `--list` exits `0` and prints all 15 module ids.
 - **C — forced clean**: after `--force --debug` against a fresh sandbox:
   - histories emptied/gone for both users → **space-in-username enumeration
     fix**;
@@ -143,6 +144,15 @@ status, Trash symlinks, safe logfile creation, and fixture rebuilds. Three build
 of the same fixture must produce identical manifests without nested symlinks.
 These checks use temporary files; host snapshot and browser states are simulated
 at the function boundary.
+
+The suite also runs `ai-sessions.sh`. It uses real SQLite databases for legacy
+and current session tables, mixed credential/configuration tables, desktop
+catalogs, and a live WAL writer. It checks dry-run byte stability, successful
+cleanup, preserved settings and credentials, optional memory cleanup, custom
+roots, repeat runs, multiple users, corrupt/unsupported schemas, database locks,
+missing SQLite, symlinks, hard links, JSON errors, and Claude scratchpads.
+Process detection is tested with controlled command listings; no host agent
+is stopped and no host session store is changed.
 
 - bash 3.2+ (no bash-4-only features used)
 - POSIX-ish userland: `find sort sed awk grep wc stat cp mv rm mkdir` — BSD or

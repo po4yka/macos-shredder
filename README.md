@@ -62,10 +62,106 @@ Dry-run and `--list` do not create logs.
 | `wifi` | Remembered Wi-Fi preference files and Wi-Fi logs |
 | `brew` | Homebrew caches and logs |
 | `apps` | Selected editor caches, logs, and saved terminal states |
+| `ai` | Local Claude Code, Codex, and OpenCode sessions and related records |
 
 Mounted volumes are excluded by default. Use `--include-volumes` to include
 their FSEvents and `.DS_Store` data. Use `--purge-snapshots` only when you also
 want to delete local Time Machine snapshots.
+
+## AI sessions
+
+The `ai` module is included when you run all modules. It operates on each
+eligible user home. Close Claude Code, Codex, OpenCode, their desktop apps,
+and their background servers before a real run. The module refuses cleanup
+if it detects a running agent or cannot inspect processes. It does not stop
+processes for you. Keep the apps closed until cleanup finishes.
+
+```sh
+# Preview local session cleanup. This also works while an agent is open.
+./shredder.sh --modules ai --dry-run --debug
+
+# After you close the agents, remove local sessions.
+sudo ./shredder.sh --modules ai --force
+
+# Also remove the supported memory, plan, and generated-artifact stores.
+sudo ./shredder.sh --modules ai --ai-derived --force
+```
+
+Session cleanup covers:
+
+| Agent | Removed data |
+| --- | --- |
+| Claude Code | Project transcripts, superseded transcripts, subagent transcripts, tool results, session indexes, prompt history, file checkpoints, pasted content, images, uploads, session environment, shell snapshots, task/team/session records, background jobs, debug logs, feedback bundles, and usage cache |
+| Codex | Sessions and archives, input history, session index, shell snapshots, attachments, dictation history, logs, known SQLite session/history/goal/queue tables, desktop session catalogs, automation run history, and session fields in desktop state JSON and its backups |
+| OpenCode | Legacy JSON sessions/messages/parts, SQLite v1 and v2 sessions/messages, tool parts, instruction payloads, attachment blobs, session events, jobs, session schedules, snapshots, tool output, logs, and prompt history |
+
+Claude scratchpads and images under `/private/tmp/claude-<uid>` are included.
+The cleaner enters this directory as the home owner and checks its physical
+path and ownership before deletion. Claude JSON preferences and their known
+backups retain configuration but lose `history` and `lastSessionId` fields.
+
+`--ai-derived` also removes Claude project/subagent memory and plans, plus
+Codex memory stores and databases, memory archives (`memories*.tgz` and
+`memories*.tar.gz`), plans, artifacts, generated images, and visualizations.
+Without this flag, those stores remain and can contain information from
+deleted conversations.
+
+Configuration, credentials, Keychain entries, skills, hooks, plugins,
+project settings, permissions, standalone automations/schedules, source
+repositories, and worktrees are preserved. An automation that targets a
+deleted chat can need manual reconfiguration. The module does not delete
+cloud chats, published sessions, remote workspaces, external backups, or
+arbitrary exported files. Other agents and third-party plugin stores are not
+covered. This is local cleanup, not guaranteed secure erase.
+
+### Custom locations
+
+Default roots are `~/.claude`, `~/.codex`, `~/.local/share/opencode`, and
+`~/.local/state/opencode`. Real runs also read `CLAUDE_CONFIG_DIR`,
+`CODEX_HOME`, `CODEX_SQLITE_HOME`, `XDG_DATA_HOME`, `XDG_STATE_HOME`,
+`OPENCODE_DB`, and `CLAUDE_CODE_TMPDIR` from the invoking environment.
+`sudo` can remove these variables. Shell startup files and agent configuration
+files are not executed or parsed to find overrides. For settings stored there,
+or for another user's custom locations, pass explicit roots:
+
+```sh
+sudo ./shredder.sh --modules ai --force \
+  --ai-root 'claude=/Users/alice/Agent Data/claude' \
+  --ai-root 'codex=/Users/alice/Agent Data/code' \
+  --ai-root 'codex-db=/Users/alice/Agent Data/databases' \
+  --ai-root 'opencode=/Users/alice/Agent Data/opencode' \
+  --ai-root 'opencode-state=/Users/alice/Agent State/opencode' \
+  --ai-root 'opencode-db=/Users/alice/Agent Data/custom.db'
+```
+
+Roots are additive: default locations are still cleaned. `opencode-db` names
+a database file; the other kinds name directories. `claude-temp` names a
+dedicated scratchpad directory whose entire contents can be removed. Explicit
+roots must be normalized absolute paths below an eligible `/Users/<user>/`
+home, without symlink parents. Storage outside that boundary is refused;
+do not work around this check with a symlink. `CLAUDE_CODE_TMPDIR` can also
+name a macOS temporary directory; the cleaner appends `claude-<uid>`.
+In tests, explicit `/Users/...` paths are mapped below `SHREDDER_ROOT`, and
+host environment overrides are ignored.
+
+### Database safety and result
+
+AI cleanup requires `sqlite3` when a database or mixed JSON state file exists.
+Known session tables are cleared in transactions; settings and credential
+tables remain. The cleaner checks table names, rejects triggers and unknown
+schemas, then compacts the database and checkpoints its WAL. It never removes
+a mixed database as a fallback. Linked databases and sidecars are refused.
+Orphan sidecars are retained for recovery and reported as incomplete cleanup.
+
+An unsupported schema, busy database, unsafe path, or failed operation produces
+exit `2`. Cleanup is not atomic across all files and databases: other roots
+can already have been cleaned. Fix the reported cause and run the module again.
+Dry-run does not open SQLite files, because even a read-only connection can
+create WAL sidecars; schema checks run only during real cleanup.
+
+Storage references: [Claude Code application data](https://code.claude.com/docs/en/claude-directory),
+[Codex session locations](https://learn.chatgpt.com/docs/reference/troubleshooting),
+and [OpenCode storage](https://opencode.ai/docs/troubleshooting/).
 
 ## Result contract
 
