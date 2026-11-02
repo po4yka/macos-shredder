@@ -95,3 +95,25 @@ test_zsh_sessions() (
 )
 test_zsh_sessions
 printf 'PASS: zsh session histories are cleared\n'
+
+test_log_rotations() (
+    setup_case log-rotations
+    local name
+    mkdir -p "$VAR_LOG"
+    for name in system.log system.log.0 install.log.2 wifi.log.1 system.log.notes system.log.3.keep; do
+        printf 'log trace\n' > "$VAR_LOG/$name"
+    done
+    printf 'compressed trace\n' | gzip > "$VAR_LOG/system.log.1.gz"
+    /bin/bash "$SHREDDER" --dry-run --modules systemlogs >/dev/null 2>&1
+    gzip -t "$VAR_LOG/system.log.1.gz"
+    [ -s "$VAR_LOG/system.log" ]
+    /bin/bash "$SHREDDER" --force --modules systemlogs >/dev/null 2>&1
+    [ ! -s "$VAR_LOG/system.log" ]
+    for name in system.log.0 system.log.1.gz install.log.2 wifi.log.1; do
+        [ ! -e "$VAR_LOG/$name" ]
+    done
+    [ -s "$VAR_LOG/system.log.notes" ]
+    [ -s "$VAR_LOG/system.log.3.keep" ]
+)
+test_log_rotations
+printf 'PASS: numbered log rotations are removed; unrelated files survive\n'

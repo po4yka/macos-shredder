@@ -995,9 +995,17 @@ SHELL_HISTORIES
 
 # --- module: systemlogs ------------------------------------------------------
 module_systemlogs() {
-    local lf u h uid
+    local lf u h uid rotated="" suffix
     for lf in system.log wifi.log install.log accountpolicy.log appfirewall.log; do
         truncate_file "$VAR_LOG/$lf"
+        while read_find_path rotated; do
+            suffix="${rotated##*/}"
+            suffix="${suffix#"$lf".}"
+            suffix="${suffix%.gz}"
+            suffix="${suffix%.bz2}"
+            case "$suffix" in ''|*[!0-9]*) continue ;; esac
+            remove_path "$rotated"
+        done < <(find_checked "$VAR_LOG" -maxdepth 1 -type f -name "$lf.*" -print0)
     done
     while read_find_path f; do
         truncate_file "$f"
