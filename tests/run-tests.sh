@@ -276,7 +276,7 @@ phase_h_user_owner_commands() {
   info 'running: user-home mutations must use the owner UID command wrapper'
   PATH="$bin:$PATH" SHREDDER_TARGET_COMMAND_LOG="$calls" \
     SHREDDER_SQLITE_CALL_LOG="$sqlite_calls" SHREDDER_REAL_SQLITE="$real_sqlite" SHREDDER_ROOT="$sb" \
-    bash "$SHREDDER" --force --modules shell,usage >"$log" 2>&1 || rc=$?
+    bash "$SHREDDER" --force --modules shell,usage,quicklook >"$log" 2>&1 || rc=$?
   info "exit code: $rc (expected 0)"
   [ "$rc" -eq 0 ] \
     && grep -q -- '-u #4242 --' "$calls" \
