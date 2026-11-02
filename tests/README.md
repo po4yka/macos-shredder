@@ -257,6 +257,9 @@ Linux uses a plistlib adapter for the unavailable native plutil boundary.
 dry-run and `.xcarchive` retention. A tool-boundary double checks successful
 dispatch; acceptance of a real `.xcresult` remains a separate native check.
 
+`ai-exports.sh` checks the Apple report filename and documented JSON arrays,
+invalid JSON, quoted paths, dry-run and retention of opaque Raycast exports.
+
 ### Document versions
 
 `bash tests/document-versions.sh` verifies explicit selection, path guards,

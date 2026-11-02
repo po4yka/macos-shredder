@@ -162,6 +162,7 @@ recording, and shell history can independently retain records of a run.
 | `diagnosticexports` | Explicit paths | Completed selected sysdiagnose archives and native-validated log archives |
 | `devicebackups` | Explicit paths | Completed selected unencrypted MobileSync backups with validated manifests |
 | `testresults` | Explicit paths | Selected Xcode result bundles validated by installed xcresulttool |
+| `aiexports` | Explicit paths | Selected Apple Intelligence report JSON with documented array structure |
 | `mailhistory` | Explicit; manual | Mail recipients and attachments; instructions only, real runs report incomplete |
 | `locationhistory` | Explicit; manual | Maps searches and significant locations; instructions only, real runs report incomplete |
 | `callhistory` | Explicit; manual | Phone and FaceTime call history; instructions only, real runs report incomplete |
@@ -1006,6 +1007,24 @@ This removes selected test results, logs and attachments. Source projects and
 `.xcarchive` distribution archives are not targets. See
 [Apple's xcresulttool command](https://developer.apple.com/documentation/xcode-release-notes/xcode-16_3-release-notes)
 and [test attachments](https://developer.apple.com/documentation/xctest/adding-attachments-to-tests-activities-and-issues).
+
+### Selected Apple Intelligence reports
+
+`aiexports --ai-export PATH` selects an exact local `Apple_Intelligence_Report.json`
+file below an eligible user home. Repeat the option for more files. The parser
+requires a JSON object with the documented `modelRequests` and
+`privateCloudComputeRequests` arrays. It does not inspect or print request content.
+Close System Settings and apps that use the report. Unknown JSON, symlinks,
+hard links and open files are refused. `--dry-run` only validates.
+
+Deleting an exported report does not disable reporting or remove internal or
+remote activity. Change reporting in System Settings > Privacy & Security >
+Apple Intelligence Report separately. Opaque Raycast `.rayconfig` exports are
+not supported: inspect and delete the exact export manually in Finder. The
+script does not infer an encrypted file format from its suffix.
+See [Apple's report format](https://security.apple.com/documentation/private-cloud-compute/appendix_appleintelligencereport),
+[Apple's report export instructions](https://support.apple.com/en-is/guide/mac-help/mchlfc0d4779/mac)
+and [Raycast export guidance](https://manual.raycast.com/import-export).
 
 ### Selected document versions
 

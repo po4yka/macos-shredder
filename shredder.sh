@@ -77,6 +77,7 @@ METADATA_FILES=()
 VERSION_FILES=()
 SPELLING_WORDS=()
 AI_ROOTS=()
+AI_EXPORTS=()
 TEST_RESULTS=()
 DEVICE_BACKUPS=()
 DIAGNOSTIC_EXPORTS=()
@@ -135,6 +136,7 @@ MODULE_IDS=(
     diagnosticexports
     devicebackups
     testresults
+    aiexports
     mailhistory
     locationhistory
     callhistory
@@ -174,6 +176,7 @@ MODULE_DESCS=(
     "Selected completed diagnostic exports"
     "Selected completed unencrypted device backups"
     "Selected Xcode test result bundles"
+    "Selected Apple Intelligence JSON reports"
     "Mail recipients and attachments (manual action required)"
     "Maps searches and significant locations (manual action required)"
     "Phone and FaceTime call history (manual action required)"
@@ -781,6 +784,9 @@ Options:
       --test-result PATH
                         Selected Xcode test result bundles.
                         Requires testresults; repeat for more paths.
+      --ai-export PATH
+                        Selected Apple Intelligence JSON reports.
+                        Requires aiexports; repeat for more paths.
       --version-file PATH
                         Remove previous versions of one local file; retain its contents.
                         Requires --modules documentversions; repeat for more files.
@@ -971,6 +977,10 @@ parse_args() {
                 [ $# -ge 2 ] || usage_error "--test-result requires a path"
                 add_selected_artifact testresults "$2"; shift 2 ;;
             --test-result=*) add_selected_artifact testresults "${1#*=}"; shift ;;
+            --ai-export)
+                [ $# -ge 2 ] || usage_error "--ai-export requires a path"
+                add_selected_artifact aiexports "$2"; shift 2 ;;
+            --ai-export=*) add_selected_artifact aiexports "${1#*=}"; shift ;;
             --version-file)
                 [ $# -ge 2 ] || usage_error "--version-file requires a file"
                 add_version_file "$2"; shift 2
@@ -1021,6 +1031,7 @@ parse_args() {
     validate_selected_artifact_options diagnosticexports diagnostic-export "${#DIAGNOSTIC_EXPORTS[@]}"
     validate_selected_artifact_options devicebackups device-backup "${#DEVICE_BACKUPS[@]}"
     validate_selected_artifact_options testresults test-result "${#TEST_RESULTS[@]}"
+    validate_selected_artifact_options aiexports ai-export "${#AI_EXPORTS[@]}"
     if module_selected documentversions; then
         [ "${#VERSION_FILES[@]}" -gt 0 ] || usage_error "documentversions requires --version-file"
     elif [ "${#VERSION_FILES[@]}" -gt 0 ]; then
@@ -3746,6 +3757,7 @@ add_selected_artifact() {
     case "$user" in ''|Shared|Guest|.*) usage_error "ineligible artifact home" ;; esac
     case "$kind" in
         diagnosticexports) DIAGNOSTIC_EXPORTS+=("$path") ;;
+        aiexports) AI_EXPORTS+=("$path") ;;
         testresults) TEST_RESULTS+=("$path") ;;
         devicebackups) DEVICE_BACKUPS+=("$path") ;;
     esac
@@ -3909,6 +3921,37 @@ module_testresults() {
             selected_remove_path "$target"
         else
             selected_artifact_refuse testresults "$target"
+        fi
+    done
+}
+
+ai_export_valid() {
+    local target="$1" result
+    [ "${target##*/}" = Apple_Intelligence_Report.json ] && [ -f "$target" ] || return 1
+    # Apple documents these two top-level arrays. SQLite JSON functions parse
+    # the selected JSON as data in memory; no report contents enter the output.
+    # An opaque Raycast .rayconfig file has no supported public validator here.
+    local escaped sql
+    escaped="${target//\'/\'\'}"
+    sql="SELECT CASE WHEN json_valid(readfile('$escaped')) THEN
+        json_type(readfile('$escaped')) = 'object' AND
+        json_type(readfile('$escaped'), '$.modelRequests') = 'array' AND
+        json_type(readfile('$escaped'), '$.privateCloudComputeRequests') = 'array'
+        ELSE 0 END;"
+    result="$(run_target_command "$target" /usr/bin/sqlite3 -batch -bail :memory: "$sql" 2>/dev/null)" || return 1
+    [ "$result" = 1 ]
+}
+
+module_aiexports() {
+    local requested target
+    for requested in ${AI_EXPORTS[@]+"${AI_EXPORTS[@]}"}; do
+        target="$SANDBOX$requested"
+        if selected_artifact_safe "$target" &&
+            selected_artifact_idle "$target" '(^|/)(System Settings|System Preferences)$' &&
+            ai_export_valid "$target" && selected_artifact_safe "$target"; then
+            selected_remove_path "$target"
+        else
+            selected_artifact_refuse aiexports "$target"
         fi
     done
 }
@@ -4584,7 +4627,7 @@ module_alfred() {
 
 module_selected() {
     if [ -z "$SELECTED_MODULES" ]; then
-        case "$1" in fsevents|clipboard|headless|slackexport|terminal|finderhistory|filemetadata|documentversions|spelling|notifications|activity|siri|mailhistory|locationhistory|callhistory|messagehistory|photometadata|alfred|devicebackups|testresults|diagnosticexports) return 1 ;; *) return 0 ;; esac
+        case "$1" in fsevents|clipboard|headless|slackexport|terminal|finderhistory|filemetadata|documentversions|spelling|notifications|activity|siri|mailhistory|locationhistory|callhistory|messagehistory|photometadata|alfred|devicebackups|testresults|aiexports|diagnosticexports) return 1 ;; *) return 0 ;; esac
     fi
     case ",$SELECTED_MODULES," in
         *",$1,"*) return 0 ;;
@@ -4623,6 +4666,7 @@ run_module() {
         activity)    module_activity ;;
         siri)        module_siri ;;
         diagnosticexports) module_diagnosticexports ;;
+        aiexports) module_aiexports ;;
         testresults) module_testresults ;;
         devicebackups) module_devicebackups ;;
         mailhistory) module_mailhistory ;;
