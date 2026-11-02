@@ -1937,7 +1937,11 @@ clean_safari_for_home() {
         log_warn "Safari is running or cannot be checked; skipping Safari site and session data"
         [ "$DRY_RUN" -eq 1 ] || FAILED_COUNT=$((FAILED_COUNT + 1))
     else
-        for root in "$saf" "$h/Library/Containers/com.apple.Safari/Data/Library/Safari"; do
+        for root in "$saf" "$h/Library/Containers/com.apple.Safari/Data/Library/Safari" \
+            "$saf"/Profiles/*/ "$h/Library/Containers/com.apple.Safari/Data/Library/Safari"/Profiles/*/; do
+            root="${root%/}"
+            # Unmatched profile globs stay literal; named profiles are directories.
+            case "$root" in */Profiles/\*) continue ;; esac
             remove_sqlite_db "$root/History.db"
             remove_path "$root/History.db-lock"
             for item in Downloads.plist TopSites.plist LastSession.plist RecentlyClosedTabs.plist; do
@@ -1951,6 +1955,10 @@ clean_safari_for_home() {
             fi
             browser_mixed_store "$root/LocalStorage"
             browser_mixed_store "$root/Databases"
+            # Icon caches are keyed by the visited site.
+            remove_path "$root/Favicon Cache"
+            remove_path "$root/Touch Icons Cache"
+            remove_path "$root/Template Icons"
         done
         for root in "$h/Library/WebKit/com.apple.Safari" \
             "$h/Library/Containers/com.apple.Safari/Data/Library/WebKit"; do
@@ -1963,6 +1971,9 @@ clean_safari_for_home() {
         done
         remove_path "$h/Library/Containers/com.apple.Safari/Data/Library/Cookies/Cookies.binarycookies"
         remove_path "$h/Library/Cookies/Cookies.binarycookies"
+        # HSTS entries name every HTTPS host that sent the header.
+        remove_path "$h/Library/Cookies/HSTS.plist"
+        remove_path "$h/Library/Containers/com.apple.Safari/Data/Library/Cookies/HSTS.plist"
         clear_dir_contents "$h/Library/Saved Application State/com.apple.Safari.savedState"
         clear_dir_contents "$h/Library/Containers/com.apple.Safari/Data/Library/Saved Application State/com.apple.Safari.savedState"
         clean_safari_cache_root "$h/Library/Caches/com.apple.Safari"
@@ -1980,6 +1991,16 @@ clean_chrome_profile_dbs() {
     remove_sqlite_db "$prof/Device Bound Sessions"
     remove_sqlite_db "$prof/Top Sites"
     remove_sqlite_db "$prof/Web Data"
+    # These stores also record visited pages, typed input or visited hosts.
+    remove_sqlite_db "$prof/Favicons"
+    remove_sqlite_db "$prof/Shortcuts"
+    remove_sqlite_db "$prof/Network Action Predictor"
+    remove_sqlite_db "$prof/DIPS"
+    remove_path "$prof/Visited Links"
+    remove_path "$prof/TransportSecurity"
+    remove_path "$prof/Network/TransportSecurity"
+    remove_path "$prof/Network Persistent State"
+    remove_path "$prof/Network/Network Persistent State"
     for item in Sessions Sessions_Encrypted 'Current Session' 'Current Tabs' 'Last Session' 'Last Tabs'; do
         remove_path "$prof/$item"
     done
@@ -2074,7 +2095,7 @@ purge_firefox_history() {
         return 0
     fi
     if ! tables="$(ai_sqlite_command "$db" "$sqlite_bin" \
-        "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('moz_places_metadata','moz_origins');" 2>/dev/null)"; then
+        "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('moz_places_metadata','moz_places_metadata_search_queries','moz_origins');" 2>/dev/null)"; then
         log_warn "failed to inspect Firefox Places database: $db"
         FAILED_COUNT=$((FAILED_COUNT + 1))
         return 0
@@ -2083,9 +2104,13 @@ purge_firefox_history() {
     # bookmarks directly as well, so a stale counter cannot delete their URLs.
     # Its visit-count triggers are temporary; update those fields explicitly.
     sql="PRAGMA secure_delete=ON; PRAGMA foreign_keys=ON; BEGIN IMMEDIATE;"
+    # Search terms do not cascade from moz_places_metadata; clear them first.
     case "$tables" in
-        *moz_places_metadata*) sql="$sql DELETE FROM moz_places_metadata;" ;;
+        *moz_places_metadata_search_queries*) sql="$sql DELETE FROM moz_places_metadata_search_queries;" ;;
     esac
+    if printf '%s\n' "$tables" | grep -qx moz_places_metadata; then
+        sql="$sql DELETE FROM moz_places_metadata;"
+    fi
     sql="$sql
         DELETE FROM moz_historyvisits;
         DELETE FROM moz_inputhistory;
@@ -2219,6 +2244,8 @@ clean_firefox_for_home() {
             purge_firefox_history "$prof/places.sqlite"
             remove_sqlite_db "$prof/cookies.sqlite"
             remove_sqlite_db "$prof/formhistory.sqlite"
+            # Favicons map page URLs to icons; Firefox fetches them again.
+            remove_sqlite_db "$prof/favicons.sqlite"
             remove_path "$prof/sessionstore.jsonlz4"
             clear_dir_contents "$prof/sessionstore-backups"
             remove_path "$prof/sessionstore.js"

@@ -214,6 +214,7 @@ check_firefox_places() {
     SELECT COUNT(*) FROM moz_historyvisits;
     SELECT COUNT(*) FROM moz_inputhistory;
     SELECT COUNT(*) FROM moz_places_metadata;
+    SELECT COUNT(*) FROM moz_places_metadata_search_queries;
     SELECT COUNT(*) FROM moz_places WHERE id = 2;
     SELECT COUNT(*) FROM moz_origins WHERE id = 2;
     SELECT COUNT(*) FROM moz_places WHERE visit_count <> 0 OR last_visit_date IS NOT NULL OR typed <> 0;
@@ -227,7 +228,7 @@ check_firefox_places() {
     PRAGMA integrity_check;
     PRAGMA foreign_key_check;" 2>/dev/null); then
     fail "$desc" 'valid Places database' 'SQLite query failed'
-  elif [ "$result" = $'0\n0\n0\n0\n0\n0\n2\n1\n1\n1\nok' ]; then
+  elif [ "$result" = $'0\n0\n0\n0\n0\n0\n0\n2\n1\n1\n1\nok' ]; then
     pass "$desc"
   else
     fail "$desc" 'history cleared; bookmarks, folder and keyword preserved' "$result"

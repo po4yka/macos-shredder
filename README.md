@@ -790,9 +790,9 @@ removed.
 
 | Browser | Additional scope |
 | --- | --- |
-| Chrome, Chromium, Edge, Brave | `History`, `Top Sites`, `Web Data` (see above), `Cookies` and `Network/Cookies`, device-bound site sessions, `Sessions` and `Sessions_Encrypted`, legacy current/last session and tab files, and HTTP(S)/file origin IndexedDB stores; default, numbered, and guest profiles |
-| Firefox | Visits, typed input and unbookmarked URLs in `places.sqlite` (bookmarks stay), `cookies.sqlite`, `formhistory.sqlite`, and HTTP(S)/file origin directories in default, temporary, permanent, and legacy persistent storage; these hold IndexedDB, local storage, cache storage, and related site files. Known legacy SQLite local-storage tables and quota-cache metadata are filtered by origin. Current and legacy session files and recovery backups are removed |
-| Safari | `History.db`, `Downloads.plist`, `TopSites.plist`, legacy session and recently closed tab files, saved application state, container cookies, and cookies in named WebKit data stores |
+| Chrome, Chromium, Edge, Brave | `History`, `Top Sites`, `Web Data` (see above), `Favicons`, `Shortcuts`, `Visited Links`, `Network Action Predictor`, `DIPS`, `TransportSecurity`, `Network Persistent State`, `Cookies` and `Network/Cookies`, device-bound site sessions, `Sessions` and `Sessions_Encrypted`, legacy current/last session and tab files, and HTTP(S)/file origin IndexedDB stores; default, numbered, and guest profiles |
+| Firefox | Visits, typed input and unbookmarked URLs in `places.sqlite` (bookmarks stay), `cookies.sqlite`, `formhistory.sqlite`, `favicons.sqlite`, saved search terms, and HTTP(S)/file origin directories in default, temporary, permanent, and legacy persistent storage; these hold IndexedDB, local storage, cache storage, and related site files. Known legacy SQLite local-storage tables and quota-cache metadata are filtered by origin. Current and legacy session files and recovery backups are removed |
+| Safari | `History.db`, `Downloads.plist`, `TopSites.plist`, icon caches and `HSTS.plist`, also in named profiles under `Safari/Profiles`; legacy session and recently closed tab files, saved application state, container cookies, and cookies in named WebKit data stores |
 
 Some stores combine website data with extension data. By default, those stores
 remain and the run exits `2` with their paths. Use the following explicit option

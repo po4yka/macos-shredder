@@ -400,3 +400,26 @@ STUB
 )
 test_process_checks_scope_owner
 printf 'PASS: per-account client checks ignore other accounts\n'
+
+test_browser_history_side_stores() (
+    setup_case browser-side-stores
+    local h="$USERS_DIR/alice" path
+    local chrome="$h/Library/Application Support/Google/Chrome/Default"
+    local firefox="$h/Library/Application Support/Firefox/Profiles/custom"
+    local safari="$h/Library/Safari"
+    mkdir -p "$chrome/Network" "$firefox" "$safari/Favicon Cache" \
+        "$safari/Profiles/ABC/Touch Icons Cache" "$h/Library/Cookies"
+    for path in "$chrome/Favicons" "$chrome/Shortcuts" "$chrome/Network Action Predictor" \
+        "$chrome/DIPS" "$chrome/Visited Links" "$chrome/Network/TransportSecurity" \
+        "$chrome/Network/Network Persistent State" "$firefox/favicons.sqlite" \
+        "$safari/Favicon Cache/icon" "$safari/Profiles/ABC/History.db" \
+        "$safari/Profiles/ABC/Touch Icons Cache/icon" "$h/Library/Cookies/HSTS.plist"; do
+        printf 'trace\n' > "$path"
+    done
+    printf 'keep\n' > "$chrome/Bookmarks"
+    /bin/bash "$SHREDDER" --force --modules browser >/dev/null 2>&1
+    [ -z "$(find "$h" -type f ! -name Bookmarks -print)" ]
+    [ -s "$chrome/Bookmarks" ]
+)
+test_browser_history_side_stores
+printf 'PASS: favicon, shortcut, HSTS and Safari profile history stores are removed\n'

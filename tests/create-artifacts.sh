@@ -112,6 +112,7 @@ CREATE TABLE moz_historyvisits (id INTEGER PRIMARY KEY, place_id INTEGER REFEREN
 CREATE TABLE moz_inputhistory (place_id INTEGER REFERENCES moz_places(id), input TEXT);
 CREATE TABLE moz_annos (id INTEGER PRIMARY KEY, place_id INTEGER REFERENCES moz_places(id), content TEXT);
 CREATE TABLE moz_places_metadata (id INTEGER PRIMARY KEY, place_id INTEGER REFERENCES moz_places(id));
+CREATE TABLE moz_places_metadata_search_queries (id INTEGER PRIMARY KEY, terms TEXT NOT NULL UNIQUE);
 INSERT INTO moz_origins VALUES (1, 'saved.example.invalid'), (2, 'history.example.invalid');
 INSERT INTO moz_places VALUES
   (1, 'https://saved.example.invalid/bookmark', 1, 2, 700000000, 1, 100, 1),
@@ -125,6 +126,7 @@ INSERT INTO moz_historyvisits VALUES (1, 1, 700000000), (2, 2, 700000001), (3, 3
 INSERT INTO moz_inputhistory VALUES (1, 'saved query'), (2, 'history query');
 INSERT INTO moz_annos VALUES (1, 1, 'saved annotation'), (2, 2, 'download trace');
 INSERT INTO moz_places_metadata VALUES (1, 1), (2, 2);
+INSERT INTO moz_places_metadata_search_queries VALUES (1, 'SHREDTEST search terms');
 SQL
 }
 
