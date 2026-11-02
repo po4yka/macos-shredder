@@ -159,6 +159,7 @@ recording, and shell history can independently retain records of a run.
 | `notifications` | Explicit | Known delivered Notification Center history |
 | `activity` | Explicit | Known KnowledgeC and IntelligencePlatform event/feedback tables; reports unsupported stores |
 | `siri` | Explicit; manual | Manual Siri/Dictation deletion instructions; real runs report incomplete |
+| `diagnosticexports` | Explicit paths | Completed selected sysdiagnose archives and native-validated log archives |
 | `mailhistory` | Explicit; manual | Mail recipients and attachments; instructions only, real runs report incomplete |
 | `locationhistory` | Explicit; manual | Maps searches and significant locations; instructions only, real runs report incomplete |
 | `callhistory` | Explicit; manual | Phone and FaceTime call history; instructions only, real runs report incomplete |
@@ -953,6 +954,26 @@ directories are rejected.
 ## License
 
 This project uses the [MIT License](LICENSE).
+
+### Selected diagnostic exports
+
+`diagnosticexports` is opt-in and requires repeatable `--diagnostic-export PATH`.
+Select exact paths below an eligible `/Users/<user>/` home. No home-wide search
+runs. Completed `sysdiagnose_*.tar.gz` files must have a matching top directory,
+`sysdiagnose.log`, and `system_logs.logarchive/Info.plist`. A selected `.logarchive`
+bundle must pass the native `log stats --archive` check. Unknown or incomplete
+formats, open targets, symlinks, hard-linked files and nested mounts are refused.
+Close collectors and applications that use these exports before cleanup.
+
+```bash
+sudo ./shredder.sh --dry-run --modules diagnosticexports \
+  --diagnostic-export /Users/alice/Downloads/sysdiagnose_DATE.tar.gz
+```
+
+Deletion removes the selected local export, including its embedded logs. It does
+not remove copies sent to Apple, cloud copies or backups. Diagnostic exports can
+contain sensitive data. See [Apple diagnostics guidance](https://developer.apple.com/feedback-assistant/)
+and [Apple's log archive example](https://developer.apple.com/documentation/technotes/tn3163-understanding-the-synchronization-of-nspersistentcloudkitcontainer).
 
 ### Selected document versions
 

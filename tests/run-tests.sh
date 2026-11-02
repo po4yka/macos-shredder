@@ -40,7 +40,7 @@ VERIFY_CLEANUP="$SCRIPT_DIR/verify-cleanup.sh"
 
 readonly MODULE_IDS=(
   shell systemlogs audit browser unified fileevents fsevents usage spotlight
-  quicklook trash dsstore wifi brew apps editors ai clipboard headless slackexport terminal finderhistory filemetadata documentversions spelling notifications activity siri mailhistory locationhistory callhistory messagehistory photometadata alfred
+  quicklook trash dsstore wifi brew apps editors ai clipboard headless slackexport terminal finderhistory filemetadata documentversions spelling notifications activity siri mailhistory locationhistory callhistory messagehistory photometadata alfred diagnosticexports
 )
 
 WORK=''
@@ -546,6 +546,7 @@ bash "$SCRIPT_DIR/file-metadata.sh"
 bash "$SCRIPT_DIR/document-versions.sh"
 bash "$SCRIPT_DIR/spelling.sh"
 bash "$SCRIPT_DIR/activity-stores.sh"
+bash "$SCRIPT_DIR/diagnostic-exports.sh"
 bash "$SCRIPT_DIR/manual-privacy.sh"
 bash "$SCRIPT_DIR/alfred.sh"
 info 'all phases and regressions passed'

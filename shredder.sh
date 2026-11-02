@@ -77,6 +77,7 @@ METADATA_FILES=()
 VERSION_FILES=()
 SPELLING_WORDS=()
 AI_ROOTS=()
+DIAGNOSTIC_EXPORTS=()
 AI_CLAUDE_TMP_BASE=/private/tmp
 TEST_MODE=0
 
@@ -129,6 +130,7 @@ MODULE_IDS=(
     notifications
     activity
     siri
+    diagnosticexports
     mailhistory
     locationhistory
     callhistory
@@ -165,6 +167,7 @@ MODULE_DESCS=(
     "Delivered notification history (explicit selection only)"
     "Known activity stores; reports unsupported stores (explicit only)"
     "Siri and Dictation deletion instructions (manual action required)"
+    "Selected completed diagnostic exports"
     "Mail recipients and attachments (manual action required)"
     "Maps searches and significant locations (manual action required)"
     "Phone and FaceTime call history (manual action required)"
@@ -763,6 +766,9 @@ Options:
       --metadata-file PATH
                         Clear origin metadata on one file below /Users/<user>/.
                         Requires --modules filemetadata; repeat for more files.
+      --diagnostic-export PATH
+                        Select one completed sysdiagnose archive or .logarchive.
+                        Requires diagnosticexports; repeat for more exports.
       --version-file PATH
                         Remove previous versions of one local file; retain its contents.
                         Requires --modules documentversions; repeat for more files.
@@ -941,6 +947,10 @@ parse_args() {
                 add_metadata_file "$2"; shift 2
                 ;;
             --metadata-file=*) add_metadata_file "${1#*=}"; shift ;;
+            --diagnostic-export)
+                [ $# -ge 2 ] || usage_error "--diagnostic-export requires a path"
+                add_selected_artifact diagnosticexports "$2"; shift 2 ;;
+            --diagnostic-export=*) add_selected_artifact diagnosticexports "${1#*=}"; shift ;;
             --version-file)
                 [ $# -ge 2 ] || usage_error "--version-file requires a file"
                 add_version_file "$2"; shift 2
@@ -988,6 +998,7 @@ parse_args() {
     elif [ "${#METADATA_FILES[@]}" -gt 0 ]; then
         usage_error "--metadata-file requires explicit --modules filemetadata"
     fi
+    validate_selected_artifact_options diagnosticexports diagnostic-export "${#DIAGNOSTIC_EXPORTS[@]}"
     if module_selected documentversions; then
         [ "${#VERSION_FILES[@]}" -gt 0 ] || usage_error "documentversions requires --version-file"
     elif [ "${#VERSION_FILES[@]}" -gt 0 ]; then
@@ -3703,6 +3714,115 @@ module_slackexport() {
     return 0
 }
 
+
+# Selected artifacts never search a whole home and never accept arbitrary roots.
+add_selected_artifact() {
+    local kind="$1" path="$2" relative user
+    case "$path" in /Users/*/*) ;; *) usage_error "selected artifacts must be below /Users/<user>/" ;; esac
+    case "$path" in *//*|*/./*|*/../*|*/.|*/..|*/|*$'\n'*|*$'\r'*|*$'\t'*) usage_error "selected artifacts need normalized paths" ;; esac
+    relative="${path#/Users/}"; user="${relative%%/*}"
+    case "$user" in ''|Shared|Guest|.*) usage_error "ineligible artifact home" ;; esac
+    case "$kind" in
+        diagnosticexports) DIAGNOSTIC_EXPORTS+=("$path") ;;
+    esac
+}
+
+validate_selected_artifact_options() {
+    if module_selected "$1"; then
+        [ "$3" -gt 0 ] || usage_error "$1 requires --$2"
+    elif [ "$3" -gt 0 ]; then
+        usage_error "--$2 requires explicit --modules $1"
+    fi
+}
+
+selected_artifact_safe() {
+    local target="$1" relative home
+    case "$target" in "$USERS_DIR"/*/*) ;; *) return 1 ;; esac
+    relative="${target#"$USERS_DIR"/}"; home="$USERS_DIR/${relative%%/*}"
+    case "${relative%%/*}" in ''|Shared|Guest|.*) return 1 ;; esac
+    [ -d "$home" ] && [ -e "$target" ] || return 1
+    guard_mutation_target "$target" || return 1
+    # Validate all descendants as the home owner. find visits mount points but
+    # does not cross them; compare each device to reject those points as well.
+    # shellcheck disable=SC2016
+    run_target_command "$target" /bin/bash -c '
+        set -e; set -o pipefail
+        parent=${1%/*}; entry=${1##*/}
+        cd -P "$parent"; [ "$(pwd -P)" = "$parent" ]
+        if [ "$(uname -s)" = Darwin ]; then stat_mode=-f; link_format=%l; else stat_mode=-c; link_format=%h; fi
+        device=$(stat "$stat_mode" %d .)
+        [ "$(stat "$stat_mode" %d "$2")" = "$device" ]
+        find "./$entry" -xdev -print0 | while IFS= read -r -d "" item; do
+            [ ! -L "$item" ]
+            [ "$(stat "$stat_mode" %d "$item")" = "$device" ]
+            if [ -f "$item" ]; then
+                [ "$(stat "$stat_mode" "$link_format" "$item")" = 1 ]
+            else
+                [ -d "$item" ]
+            fi
+        done
+    ' sh "$target" "$home" >/dev/null 2>&1
+}
+
+selected_artifact_idle() {
+    local target="$1" pattern="$2" processes result rc=0
+    [ "$TEST_MODE" -eq 0 ] || return 0
+    processes="$(ps -axo comm= 2>/dev/null)" || return 1
+    if printf '%s\n' "$processes" | grep -Ei "$pattern" >/dev/null; then return 1; fi
+    command -v lsof >/dev/null 2>&1 || return 1
+    if [ -d "$target" ]; then
+        result="$(lsof -t +D "$target" 2>&1)" || rc=$?
+    else
+        result="$(lsof -t -- "$target" 2>&1)" || rc=$?
+    fi
+    [ "$rc" -eq 1 ] && [ -z "$result" ]
+}
+
+selected_artifact_refuse() {
+    log_warn "$1: unknown, incomplete, active or unsafe artifact retained: $2"
+    FAILED_COUNT=$((FAILED_COUNT + 1))
+}
+
+diagnostic_export_valid() {
+    local target="$1" listing entry root expected found_log=0 found_archive=0
+    case "${target##*/}" in
+        *.logarchive)
+            [ -d "$target" ] && [ -f "$target/Info.plist" ] || return 1
+            # Native inspection is required: a directory suffix is not proof.
+            run_target_command "$target" /usr/bin/log stats --archive "$target" --overview >/dev/null 2>&1
+            ;;
+        sysdiagnose_*.tar.gz)
+            [ -f "$target" ] || return 1
+            expected="${target##*/}"; expected="${expected%.tar.gz}"
+            listing="$(run_target_command "$target" /usr/bin/tar -tzf "$target" 2>/dev/null)" || return 1
+            [ -n "$listing" ] || return 1
+            while IFS= read -r entry; do
+                entry="${entry#./}"; root="${entry%%/*}"
+                [ "$root" = "$expected" ] || return 1
+                case "$entry" in *'/../'*|*'/./'*|*'//'*) return 1 ;; esac
+                [ "$entry" != "$expected/sysdiagnose.log" ] || found_log=1
+                [ "$entry" != "$expected/system_logs.logarchive/Info.plist" ] || found_archive=1
+            done <<< "$listing"
+            [ "$found_log" -eq 1 ] && [ "$found_archive" -eq 1 ]
+            ;;
+        *) return 1 ;;
+    esac
+}
+
+module_diagnosticexports() {
+    local requested target
+    for requested in ${DIAGNOSTIC_EXPORTS[@]+"${DIAGNOSTIC_EXPORTS[@]}"}; do
+        target="$SANDBOX$requested"
+        if selected_artifact_safe "$target" &&
+            selected_artifact_idle "$target" '(^|/)(sysdiagnose|log)$' &&
+            diagnostic_export_valid "$target" && selected_artifact_safe "$target"; then
+            selected_remove_path "$target"
+        else
+            selected_artifact_refuse diagnosticexports "$target"
+        fi
+    done
+}
+
 # --- module: terminal --------------------------------------------------------
 
 add_terminal_log_file() {
@@ -4374,7 +4494,7 @@ module_alfred() {
 
 module_selected() {
     if [ -z "$SELECTED_MODULES" ]; then
-        case "$1" in fsevents|clipboard|headless|slackexport|terminal|finderhistory|filemetadata|documentversions|spelling|notifications|activity|siri|mailhistory|locationhistory|callhistory|messagehistory|photometadata|alfred) return 1 ;; *) return 0 ;; esac
+        case "$1" in fsevents|clipboard|headless|slackexport|terminal|finderhistory|filemetadata|documentversions|spelling|notifications|activity|siri|mailhistory|locationhistory|callhistory|messagehistory|photometadata|alfred|diagnosticexports) return 1 ;; *) return 0 ;; esac
     fi
     case ",$SELECTED_MODULES," in
         *",$1,"*) return 0 ;;
@@ -4412,6 +4532,7 @@ run_module() {
         notifications) module_notifications ;;
         activity)    module_activity ;;
         siri)        module_siri ;;
+        diagnosticexports) module_diagnosticexports ;;
         mailhistory) module_mailhistory ;;
         locationhistory) module_locationhistory ;;
         callhistory) module_callhistory ;;

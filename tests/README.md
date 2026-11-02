@@ -246,6 +246,9 @@ those failures are visible in command output but do not automatically populate
 The fixture checks do not establish secure erasure on APFS or SSDs. They verify
 selected logical removals and preservation rules against the tested layouts.
 
+`diagnostic-exports.sh` checks exact export selection, archive identity, dry-run,
+invalid formats, symlinks, hard links and process-query refusal in temporary fixtures.
+
 ### Document versions
 
 `bash tests/document-versions.sh` verifies explicit selection, path guards,
