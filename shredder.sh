@@ -606,7 +606,7 @@ sqlite_purge() {
     fi
     sqlite_bin="$(command -v sqlite3 2>/dev/null || true)"
     if [ -z "$sqlite_bin" ]; then
-        log_debug "sqlite3 unavailable; removing database instead: $db"
+        log_warn "sqlite3 unavailable; removing the complete database instead: $db"
         remove_sqlite_db "$db"
         return 0
     fi
@@ -615,7 +615,8 @@ sqlite_purge() {
         CLEANED_COUNT=$((CLEANED_COUNT + 1))
         return 0
     fi
-    if run_target_command "$db" "$sqlite_bin" "$db" "$sql" >/dev/null 2>&1; then
+    # -init /dev/null keeps a user's ~/.sqliterc out of the statement.
+    if run_target_command "$db" "$sqlite_bin" -batch -init /dev/null "$db" "$sql" >/dev/null 2>&1; then
         log_debug "sqlite ok [$sql]: $db"
         CLEANED_COUNT=$((CLEANED_COUNT + 1))
     else
