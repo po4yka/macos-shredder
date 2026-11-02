@@ -197,3 +197,7 @@ not call the real FSEvents purge API or erase live unified/audit stores. Native
 API acceptance, system permissions, and daemon behavior require a separate
 authorized host test. The read-only JXA event-ID lookup confirms bridge
 availability only.
+
+`file-metadata.sh` checks explicit selection, repeat cleanup, dry-run, links,
+retained content and other attributes. It uses native xattr on macOS fixtures
+and a file-backed command double on Linux. It does not change host files.

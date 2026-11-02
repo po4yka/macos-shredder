@@ -40,7 +40,7 @@ VERIFY_CLEANUP="$SCRIPT_DIR/verify-cleanup.sh"
 
 readonly MODULE_IDS=(
   shell systemlogs audit browser unified fileevents fsevents usage spotlight
-  quicklook trash dsstore wifi brew apps editors ai clipboard headless slackexport terminal finderhistory
+  quicklook trash dsstore wifi brew apps editors ai clipboard headless slackexport terminal finderhistory filemetadata
 )
 
 WORK=''
@@ -541,4 +541,5 @@ bash "$SCRIPT_DIR/slack-export.sh"
 bash "$SCRIPT_DIR/terminal-output.sh"
 bash "$SCRIPT_DIR/finder-history.sh"
 bash "$SCRIPT_DIR/system-traces.sh"
+bash "$SCRIPT_DIR/file-metadata.sh"
 info 'all phases and regressions passed'

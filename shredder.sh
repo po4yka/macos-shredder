@@ -67,6 +67,7 @@ CLIPBOARD_INCLUDE_PINNED=0
 CLIPBOARD_CURRENT=0
 HEADLESS_DAYS=7
 SLACK_EXPORT_ROOTS=()
+METADATA_FILES=()
 AI_ROOTS=()
 AI_CLAUDE_TMP_BASE=/private/tmp
 TEST_MODE=0
@@ -116,6 +117,7 @@ MODULE_IDS=(
     slackexport
     terminal
     finderhistory
+    filemetadata
 )
 MODULE_DESCS=(
     "Shell and REPL histories, session data"
@@ -140,6 +142,7 @@ MODULE_DESCS=(
     "Selected local Slack exports (explicit selection only)"
     "Terminal saved output and selected logs (explicit selection only)"
     "Finder and Open/Save history keys (explicit selection only)"
+    "Selected file origin metadata (explicit selection only)"
 )
 
 # Color codes; filled by setup_colors(), left empty when colors are disabled.
@@ -744,6 +747,9 @@ Options:
       --slack-export-root PATH
                         Select a local export directory below /Users/<user>/.
                         Requires --modules slackexport; repeat for more roots.
+      --metadata-file PATH
+                        Clear origin metadata on one file below /Users/<user>/.
+                        Requires --modules filemetadata; repeat for more files.
       --ai-root KIND=PATH
                         Add an AI storage location below /Users/<user>/.
                         Kinds: claude, codex, codex-db, opencode,
@@ -921,6 +927,11 @@ parse_args() {
                 add_slack_export_root "$2"; shift 2
                 ;;
             --slack-export-root=*) add_slack_export_root "${1#*=}"; shift ;;
+            --metadata-file)
+                [ $# -ge 2 ] || usage_error "--metadata-file requires a file"
+                add_metadata_file "$2"; shift 2
+                ;;
+            --metadata-file=*) add_metadata_file "${1#*=}"; shift ;;
             --ai-root)
                 [ $# -ge 2 ] || usage_error "--ai-root requires KIND=PATH"
                 add_ai_root "$2"
@@ -952,6 +963,11 @@ parse_args() {
         if ! module_selected systemlogs && ! module_selected audit; then
             usage_error "--logs-older-than requires systemlogs or audit"
         fi
+    fi
+    if module_selected filemetadata; then
+        [ "${#METADATA_FILES[@]}" -gt 0 ] || usage_error "filemetadata requires --metadata-file"
+    elif [ "${#METADATA_FILES[@]}" -gt 0 ]; then
+        usage_error "--metadata-file requires explicit --modules filemetadata"
     fi
     case "$HEADLESS_DAYS" in ''|*[!0-9]*|0*|??????*) usage_error "--headless-days must be between 1 and 99999" ;; esac
     if module_selected slackexport; then
@@ -3926,9 +3942,90 @@ module_finderhistory() {
     return 0
 }
 
+# --- module: filemetadata ----------------------------------------------------
+
+add_metadata_file() {
+    local path="$1" relative user
+    case "$path" in /Users/*/*) ;; *) usage_error "metadata files must be below /Users/<user>/" ;; esac
+    case "$path" in
+        *//*|*/./*|*/../*|*/.|*/..|*/|*$'\n'*|*$'\r'*|*$'\t'*)
+            usage_error "metadata files must have normalized absolute paths" ;;
+    esac
+    relative="${path#/Users/}"; user="${relative%%/*}"
+    case "$user" in ''|Shared|Guest|.*) usage_error "ineligible metadata file home" ;; esac
+    METADATA_FILES+=("$path")
+}
+
+# List names only; never print the URL or sender stored in the attribute.
+# xattr -s acts on a replaced symlink itself, not the link target.
+clear_file_origin() {
+    local target="$1" xattr_bin status=0
+    guard_mutation_target "$target" || return 0
+    if [ ! -f "$target" ]; then
+        log_warn "filemetadata: selected target is not a regular file: $target"
+        FAILED_COUNT=$((FAILED_COUNT + 1)); return 0
+    fi
+    xattr_bin=/usr/bin/xattr
+    if [ "$TEST_MODE" -eq 1 ]; then xattr_bin="$(command -v xattr 2>/dev/null || true)"; fi
+    if [ ! -x "$xattr_bin" ]; then
+        log_warn "filemetadata: xattr is unavailable; file retained: $target"
+        FAILED_COUNT=$((FAILED_COUNT + 1)); return 0
+    fi
+    # Pin the parent after privilege reduction and refuse shared file metadata.
+    # shellcheck disable=SC2016
+    run_target_command "$target" /bin/sh -c '
+        parent=${1%/*}; entry=${1##*/}; attr=com.apple.metadata:kMDItemWhereFroms
+        cd -P "$parent" || exit 1
+        [ "$(pwd -P)" = "$parent" ] || exit 1
+        [ -f "./$entry" ] && [ ! -L "./$entry" ] || exit 1
+        if [ "$(uname -s)" = Darwin ]; then
+            links=$(stat -f %l "./$entry") || exit 1
+        else
+            links=$(stat -c %h "./$entry") || exit 1
+        fi
+        [ "$links" = 1 ] || exit 1
+        names=$("$2" -s "./$entry") || exit 1
+        printf "%s\n" "$names" | grep -Fx "$attr" >/dev/null || exit 3
+        [ "$3" = 0 ] || exit 0
+        "$2" -s -d "$attr" "./$entry" || exit 1
+        names=$("$2" -s "./$entry") || exit 1
+        if printf "%s\n" "$names" | grep -Fx "$attr" >/dev/null; then exit 1; fi
+    ' sh "$target" "$xattr_bin" "$DRY_RUN" >/dev/null 2>&1 || status=$?
+    case "$status" in
+        0)
+            CLEANED_COUNT=$((CLEANED_COUNT + 1))
+            if [ "$DRY_RUN" -eq 1 ]; then
+                log_debug "[DRY RUN] would clear file origin metadata: $target"
+            else
+                log_debug "cleared file origin metadata: $target"
+            fi ;;
+        3) log_debug "filemetadata: no origin attribute: $target" ;;
+        *)
+            log_warn "filemetadata: cannot clear origin metadata (links/access/tool failure): $target"
+            FAILED_COUNT=$((FAILED_COUNT + 1)) ;;
+    esac
+    return 0
+}
+
+module_filemetadata() {
+    local item path matched u h uid
+    for item in ${METADATA_FILES[@]+"${METADATA_FILES[@]}"}; do
+        path="$SANDBOX$item"; matched=0
+        while IFS=$'\t' read -r u h uid; do
+            case "$path" in "$h"/*) matched=1 ;; esac
+        done < <(enumerate_users)
+        if [ "$matched" -eq 0 ]; then
+            log_warn "filemetadata: no eligible user home for selected file: $item"
+            FAILED_COUNT=$((FAILED_COUNT + 1)); continue
+        fi
+        clear_file_origin "$path"
+    done
+    return 0
+}
+
 module_selected() {
     if [ -z "$SELECTED_MODULES" ]; then
-        case "$1" in fsevents|clipboard|headless|slackexport|terminal|finderhistory) return 1 ;; *) return 0 ;; esac
+        case "$1" in fsevents|clipboard|headless|slackexport|terminal|finderhistory|filemetadata) return 1 ;; *) return 0 ;; esac
     fi
     case ",$SELECTED_MODULES," in
         *",$1,"*) return 0 ;;
@@ -3960,6 +4057,7 @@ run_module() {
         slackexport) module_slackexport ;;
         terminal)    module_terminal ;;
         finderhistory) module_finderhistory ;;
+        filemetadata) module_filemetadata ;;
         *)
             log_warn "unknown module id in dispatch: $1"
             ;;

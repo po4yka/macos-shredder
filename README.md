@@ -81,6 +81,7 @@ home directories. There is no single-user selection option.
 | `--clipboard-current` | Also clear the verified active GUI user's current clipboard |
 | `--headless-days N` | Keep Chrome Headless profiles with changes in the last N days; default 7, range 1–99999 |
 | `--slack-export-root PATH` | Select a local Slack export directory; repeatable and required with `--modules slackexport` |
+| `--metadata-file PATH` | Select one file for origin metadata cleanup; repeatable, requires `filemetadata` |
 | `--ai-root KIND=PATH` | Add a custom AI storage location; repeat for multiple roots |
 
 The scope-expansion flags are off by default. `--ai-root` is additive;
@@ -119,6 +120,8 @@ Dry-run and `--list` do not create logs.
 | `headless` | Old, unlocked Chrome Headless temporary profiles; explicit selection only |
 | `finderhistory` | Known Finder and Open/Save history keys; explicit selection only |
 | `terminal` | Terminal/iTerm2 saved output and explicitly selected session logs; explicit selection only |
+
+| `filemetadata` | Origin metadata on explicitly selected files; explicit selection only |
 | `slackexport` | Known data in explicitly selected local Slack exports; explicit selection only |
 
 Mounted volumes are excluded by default. Use `--include-volumes` to include
@@ -686,3 +689,25 @@ are outside this allowlist. Use `usage` for shared recent-document lists.
 These paths and key meanings are described in the
 [JPCERT macOS forensics workshop, page 106](https://jsac.jpcert.or.jp/archive/2022/pdf/JSAC2022_workshop_macOS-forensic_en.pdf).
 The Finder key names were also checked against the installed Finder executable.
+
+### Selected file origin metadata
+
+`filemetadata` requires one or more `--metadata-file /Users/<user>/path`
+arguments. It clears only `com.apple.metadata:kMDItemWhereFroms`, which can
+contain a download URL or sender information. It does not search directories
+or delete file content. For example:
+
+```sh
+./shredder.sh --modules filemetadata --metadata-file /Users/alice/Downloads/report.pdf --dry-run --debug
+```
+
+The file must be a regular file in an eligible home. Linked paths, hard links,
+directories and missing targets are refused. The module uses the file owner's
+identity and the native `xattr` tool. It reads attribute names, not values.
+Other attributes, including quarantine, Finder tags and comments, are retained.
+Filesystem metadata change times can change when an attribute is removed.
+
+This is not a universal copy-history reset. File contents, other copies,
+Spotlight indexes and backups can still contain origin information. See Apple's
+[`kMDItemWhereFroms` reference](https://developer.apple.com/documentation/coreservices/kmditemwherefroms)
+and the native `xattr(1)` manual for the attribute and tool behavior.
