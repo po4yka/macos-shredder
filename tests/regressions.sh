@@ -423,3 +423,16 @@ test_browser_history_side_stores() (
 )
 test_browser_history_side_stores
 printf 'PASS: favicon, shortcut, HSTS and Safari profile history stores are removed\n'
+
+test_fda_probe_lists_directory() (
+    setup_case fda-probe
+    mkdir -p "$USERS_DIR/alice/Library/Safari"
+    # TCC lets stat() succeed but blocks reading entries.
+    # shellcheck disable=SC2329 # called by probe_full_disk_access
+    ls() { return 1; }
+    if probe_full_disk_access; then return 1; fi
+    unset -f ls
+    probe_full_disk_access
+)
+test_fda_probe_lists_directory
+printf 'PASS: the Full Disk Access probe reads directory entries\n'

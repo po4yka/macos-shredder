@@ -1163,19 +1163,16 @@ check_privileges() {
     fi
 }
 
-# probe_full_disk_access - stat the first existing user's Library/Safari
-# directory; it is TCC-protected, so unreadable means FDA is missing.
+# probe_full_disk_access - list the first existing user's Library/Safari
+# directory. TCC allows stat() and access() checks on the directory itself
+# but blocks reading its entries, so only a listing detects missing FDA.
 probe_full_disk_access() {
     local u h uid safari_dir
     while IFS=$'\t' read -r u h uid; do
         safari_dir="$h/Library/Safari"
-        [ -d "$safari_dir" ] || continue
-        guard_mutation_target "$safari_dir" || return 1
+        [ -d "$safari_dir" ] && [ ! -L "$safari_dir" ] || continue
         log_debug "probing Full Disk Access via: $safari_dir"
-        if ! stat "$safari_dir" >/dev/null 2>&1; then
-            return 1
-        fi
-        if ! [ -r "$safari_dir" ] || ! [ -x "$safari_dir" ]; then
+        if ! ls -a "$safari_dir" >/dev/null 2>&1; then
             return 1
         fi
         return 0
