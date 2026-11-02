@@ -46,6 +46,7 @@ module_shell() {
         parent-int) kill -s INT "$$"; sleep 0.2 ;;
         parent-term) kill -s TERM "$$"; sleep 0.2 ;;
         parent-hup) kill -s HUP "$$"; sleep 0.2 ;;
+        parent-int-ignored) trap '' INT; kill -s INT "$$"; sleep 2 ;;
         multiple|dryrun) false ;;
         clean|snapshot) : ;;
     esac
@@ -74,7 +75,7 @@ fi
 DRIVER
     case "$mode" in
         clean|state) expected=0 ;;
-        interrupt|signal-int|parent-int) expected=130 ;;
+        interrupt|signal-int|parent-int|parent-int-ignored) expected=130 ;;
         signal-term|parent-term) expected=143 ;;
         signal-hup|parent-hup) expected=129 ;;
     esac
@@ -106,6 +107,8 @@ DRIVER
         interrupt|signal-*|parent-*)
             # Allow the child's foreground command to return after cancellation.
             sleep 0.3
+            # An ignoring step would write its tail after its 2-second sleep.
+            if [ "$mode" = parent-int-ignored ]; then sleep 2; fi
             [ -s "$root/Users/alice/.Trash/entry" ]
             [ ! -e "$root/module-tail" ]
             if grep -q ' - summary' "$log"; then return 1; fi
@@ -136,7 +139,7 @@ DRIVER
     fi
 }
 
-for mode in command pipeline return exit early-success unset redirect missing-state handled state clean snapshot multiple dryrun state-init interrupt signal-int signal-term signal-hup parent-int parent-term parent-hup; do
+for mode in command pipeline return exit early-success unset redirect missing-state handled state clean snapshot multiple dryrun state-init interrupt signal-int signal-term signal-hup parent-int parent-term parent-hup parent-int-ignored; do
     run_case "$mode"
     printf 'PASS: cleanup isolation (%s)\n' "$mode"
 done

@@ -253,11 +253,29 @@ on_interrupt() {
     on_signal INT 130 "interrupted by user"
 }
 
-# Forward cancellation to the isolated step before the parent exits.
+# cleanup_step_alive PID - succeed while the step process runs. An unreaped
+# step is a zombie, which kill -0 still reports, so check its state.
+cleanup_step_alive() {
+    local state
+    state="$(ps -o stat= -p "$1" 2>/dev/null)" || return 1
+    case "$state" in ''|Z*) return 1 ;; esac
+    return 0
+}
+
+# Forward cancellation to the isolated step before the parent exits. A step
+# can ignore the signal, or a command in it can catch the signal and exit
+# normally. Wait briefly, then kill the step group, so that no cleanup
+# continues after the parent reports that it stopped.
 on_signal() {
-    local signal="$1" status="$2" reason="$3"
+    local signal="$1" status="$2" reason="$3" tries=0
     if [ -n "$CLEANUP_PID" ]; then
         kill -s "$signal" -- "-$CLEANUP_PID" 2>/dev/null || true
+        while [ "$tries" -lt 10 ] && cleanup_step_alive "$CLEANUP_PID"; do
+            sleep 0.1 2>/dev/null || break
+            tries=$((tries + 1))
+        done
+        kill -s KILL -- "-$CLEANUP_PID" 2>/dev/null || true
+        wait "$CLEANUP_PID" 2>/dev/null || true
     fi
     stop_cleanup_watchdog cancelled
     cleanup_step_state
