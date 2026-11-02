@@ -358,7 +358,7 @@ run_force_checks() { # run_force_checks <root>
     "$root/Library/Preferences/SystemConfiguration/com.apple.wifi.known-networks"
 
   # var folders
-  check_gone_or_empty 'notificationcenter db2 contents gone' \
+  check_history_survives 'notificationcenter retained without explicit selection' \
     "$root/private/var/folders/xx/yy/C/com.apple.notificationcenter/db2/db.db"
   check_gone_or_empty 'quicklook thumbnailcache emptied' \
     "$root/private/var/folders/xx/yy/C/com.apple.QuickLook.thumbnailcache/thumb.jpg"

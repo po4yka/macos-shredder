@@ -129,7 +129,7 @@ remove it when finished. Never mark a real home or mounted volume as a sandbox.
 | D — dry-run | File hashes, directories, and symlink targets match the pre-run manifest; an added file makes verification fail |
 | E — sandbox guard | An unmarked root is refused before cleanup |
 | F — confirmation | Non-interactive cleanup without `--force` fails without changing the fixture |
-| G — host isolation | Sandbox mode does not invoke host `defaults` or `qlmanage` commands |
+| G — host isolation | Standard sandbox modules do not invoke host `defaults` or `qlmanage` commands |
 | H — owner privileges | Home and per-user cache mutations use the owner-UID wrapper when the caller UID differs |
 | I — symlink refusal | Adversarial browser paths return `2` with the expected failure count; escape sentinels remain |
 | J — sandbox boundary | A linked system path cannot redirect cleanup outside the marked root |
@@ -201,3 +201,5 @@ availability only.
 `file-metadata.sh` checks explicit selection, repeat cleanup, dry-run, links,
 retained content and other attributes. It uses native xattr on macOS fixtures
 and a file-backed command double on Linux. It does not change host files.
+
+`activity-stores.sh` uses marked temporary roots and real SQLite fixtures for delivered/pending notification separation, preserved configuration, KnowledgeC related event data, IntelligencePlatform event/feedback logs, unknown schemas, triggers, links, writer guards, dry-run stability, and honest Siri/unsupported-store reporting.

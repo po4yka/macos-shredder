@@ -106,7 +106,7 @@ Dry-run and `--list` do not create logs.
 | `unified` | Apple unified logging store |
 | `fileevents` | Quarantine download event databases |
 | `fsevents` | Per-volume FSEvents history through CoreServices; explicit selection only |
-| `usage` | Per-user KnowledgeC, recent items, and Notification Center data |
+| `usage` | Known KnowledgeC event tables and recent items |
 | `spotlight` | Spotlight erase-and-rebuild operation |
 | `quicklook` | Per-user Quick Look caches |
 | `trash` | Per-user Trash contents, including hidden files; mounted-volume Trash with `--include-volumes` |
@@ -118,11 +118,13 @@ Dry-run and `--list` do not create logs.
 | `ai` | Local sessions for Claude Code, Codex, OpenCode, Cursor, Windsurf, Continue, Cline/Roo, and Aider |
 | `clipboard` | Known Maccy clipboard history; explicit selection only |
 | `headless` | Old, unlocked Chrome Headless temporary profiles; explicit selection only |
-| `finderhistory` | Known Finder and Open/Save history keys; explicit selection only |
-| `terminal` | Terminal/iTerm2 saved output and explicitly selected session logs; explicit selection only |
-
-| `filemetadata` | Origin metadata on explicitly selected files; explicit selection only |
 | `slackexport` | Known data in explicitly selected local Slack exports; explicit selection only |
+| `terminal` | Terminal/iTerm2 saved output and explicitly selected session logs; explicit selection only |
+| `finderhistory` | Known Finder and Open/Save history keys; explicit selection only |
+| `filemetadata` | Origin metadata on explicitly selected files; explicit selection only |
+| `notifications` | Known delivered Notification Center history; explicit selection only |
+| `activity` | Known KnowledgeC and IntelligencePlatform event/feedback tables; reports unsupported stores; explicit selection only |
+| `siri` | Manual Siri/Dictation deletion instructions; real runs report incomplete; explicit selection only |
 
 Mounted volumes are excluded by default. Use `--include-volumes` to include
 their FSEvents, `.DS_Store` data, and per-user Trash in the corresponding
@@ -262,6 +264,66 @@ deleted. Antigravity derived stores (`brain`, `knowledge`, `implicit`, and
 artifacts), backup roots, arbitrary database copies, and context-mode root
 logs remain outside this scope, even with `--ai-derived`. They can retain
 conversation data. See [Gemini session management](https://geminicli.com/docs/cli/session-management/).
+
+### Notification and activity history
+
+`notifications` clears delivered records and the delivered/displayed lists in
+known Notification Center `db2/db` databases. It checks both the modern
+`Library/Group Containers/group.com.apple.usernoted` location and legacy
+`com.apple.notificationcenter` cache locations. Pending request records,
+request lists, app registrations, notification categories, and database
+settings remain. Unknown files, including corrupt database archives, remain
+and cause exit `2`. The default `usage` module no longer removes entire
+notification database directories.
+
+`activity` clears known event tables in KnowledgeC and the `events`/`pre_events`
+tables in `Library/IntelligencePlatform/eventLog.db`, plus `feedback`/`deferred`
+in `feedbackLog.db`. Migration records remain. KnowledgeC cleanup also runs
+in `usage`; it clears event objects, structured/custom metadata, event links,
+sources, and histograms when present. It retains Core Data metadata, key/value
+settings, contextual registrations, and sync state. Retained sync changesets
+can contain older event data; this is not a full KnowledgeC or cloud-history
+reset.
+
+These operations require closed stores and stopped writer services. The script
+checks process metadata and open database/sidecar files. It does not kill or
+restart services. Use an offline user session and keep services stopped until
+the run finishes. Unknown tables, missing required columns, triggers, views,
+linked files, active writers, and SQLite failures stop cleanup. SQLite handles
+the transaction, compaction, and WAL checkpoint; there is no database-removal
+fallback. An error after commit can mean some rows were cleared before
+compaction or checkpoint failed. Dry-run does not open SQLite or validate its
+schema.
+
+Biome streams and IntelligencePlatform graph/behavior stores do not have a
+verified selective reset in this script. If those stores are present,
+`activity` retains them and reports exit `2`, even if known event logs were
+cleared. Configuration, graph, model, and sync directories are never deleted
+as a fallback. No supported global reset command was found in the macOS 27
+utilities or the Apple documentation checked for this implementation. Native
+`biomed(8)`, `BiomeAgent(8)`, and `intelligenceplatformd(8)` document services,
+not reset commands; `usernoted(8)` explicitly has no options. The public
+[notification removal API](https://developer.apple.com/documentation/usernotifications/unusernotificationcenter/removealldeliverednotifications())
+operates on the calling app's notifications only.
+
+```sh
+./shredder.sh --modules notifications,activity --dry-run --debug
+```
+
+### Siri and Dictation
+
+`siri` gives the supported manual action and never claims automatic cleanup.
+A real run returns exit `2` with zero items counted as cleaned by this module.
+Follow [Apple's Siri and Dictation history instructions](https://support.apple.com/en-bn/guide/mac-help/mchlf55961c0/mac):
+open **System Settings > Apple Intelligence & Siri** (or **Siri**), select
+**Delete Siri & Dictation History**, then confirm **Delete**. Internet access
+is required. This does not change the audio-sharing preference.
+
+On macOS 27, [Siri app conversations](https://support.apple.com/en-mide/guide/mac-help/q7ny3g54v9lk/mac)
+are separate: Control-click a conversation and choose **Delete**, then confirm.
+These conversations can sync between devices. No supported command-line API
+was found for these actions. The module does not open settings, click buttons,
+change sharing preferences, or remove Siri configuration files.
 
 ### Chrome Headless temporary profiles
 
@@ -424,7 +486,8 @@ Settings, credentials, extensions, project files, Git history, unsaved editor
 cleanup also removes stored marks, registers and recent-file lists.
 The `editors` module owns `.viminfo`; `--modules shell` no longer clears it.
 Use `ai` to clear supported editor chat histories and `apps` for the selected
-application caches, logs, and saved terminal states.
+application caches and logs. Use the explicit `terminal` module for saved
+terminal states.
 Custom user-data directories, custom `idea.system.path`, `NVIM_APPNAME`, XDG or
 ShaDa path overrides, remote editor stores and third-party history extensions
 are outside this module's scope. Recent-file and search records in mixed editor

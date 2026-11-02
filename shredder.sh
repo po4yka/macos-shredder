@@ -118,6 +118,9 @@ MODULE_IDS=(
     terminal
     finderhistory
     filemetadata
+    notifications
+    activity
+    siri
 )
 MODULE_DESCS=(
     "Shell and REPL histories, session data"
@@ -143,6 +146,9 @@ MODULE_DESCS=(
     "Terminal saved output and selected logs (explicit selection only)"
     "Finder and Open/Save history keys (explicit selection only)"
     "Selected file origin metadata (explicit selection only)"
+    "Delivered notification history (explicit selection only)"
+    "Known activity stores; reports unsupported stores (explicit only)"
+    "Siri and Dictation deletion instructions (manual action required)"
 )
 
 # Color codes; filled by setup_colors(), left empty when colors are disabled.
@@ -763,6 +769,8 @@ Scope:
   Close the clients listed in README.md before cleanup. --force skips only
   confirmation; it does not bypass process, path or database checks.
   A dry-run does not validate mixed SQLite schemas or prove secure erasure.
+  notifications/activity require offline stores; siri prints manual steps.
+  Unsupported activity stores remain intact and real runs report exit 2.
 
 Environment:
   SHREDDER_ROOT         When set, every filesystem target is rooted under this
@@ -2267,33 +2275,7 @@ module_fsevents() {
 
 # --- module: usage -----------------------------------------------------------
 purge_knowledge_db() {
-    local db="$1"
-    local tbl tables sqlite_bin
-    guard_mutation_target "$db" || return 0
-    [ -f "$db" ] || return 0
-    sqlite_bin="$(command -v sqlite3 2>/dev/null || true)"
-    if [ -z "$sqlite_bin" ]; then
-        log_debug "sqlite3 unavailable; removing KnowledgeC database instead: $db"
-        remove_sqlite_db "$db"
-        return 0
-    fi
-    if [ "$DRY_RUN" -eq 1 ]; then
-        log_debug "[DRY RUN] would purge knowledge tables and VACUUM: $db"
-        CLEANED_COUNT=$((CLEANED_COUNT + 1))
-        return 0
-    fi
-    if ! tables="$(run_target_command "$db" "$sqlite_bin" "$db" \
-        "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('ZOBJECT','ZSTRUCTUREDMETADATA');" \
-        2>/dev/null)"; then
-        log_warn "failed to inspect KnowledgeC tables: $db"
-        FAILED_COUNT=$((FAILED_COUNT + 1))
-        return 0
-    fi
-    while IFS= read -r tbl; do
-        [ -n "$tbl" ] || continue
-        sqlite_purge "$db" "DELETE FROM $tbl;"
-    done <<< "$tables"
-    sqlite_purge "$db" "VACUUM;"
+    activity_clean_store "$1" knowledge
 }
 
 clean_recent_items_for_user() {
@@ -2325,12 +2307,6 @@ module_usage() {
     # Keep the legacy system store for older macOS releases, then handle the
     # current per-user Knowledge store.
     purge_knowledge_db "$KNOWLEDGE_DB"
-    # Notification Center databases under /private/var/folders.
-    while read_find_path nc; do
-        if [ -d "$nc/db2" ]; then
-            clear_dir_contents "$nc/db2"
-        fi
-    done < <(find_checked "$VAR_FOLDERS" -type d -name 'com.apple.notificationcenter' -print0)
     # Recent items, executed in each user's own context.
     while IFS=$'\t' read -r u h uid; do
         [ -d "$h" ] || continue
@@ -4023,9 +3999,156 @@ module_filemetadata() {
     return 0
 }
 
+# --- modules: notifications / activity / siri -------------------------------
+# System writers are not killed. An offline store is required: daemon restarts
+# can recreate data or hold stale Core Data state after direct SQLite cleanup.
+activity_store_idle() {
+    local db="$1" flavor="$2" processes pattern suffix
+    [ "$TEST_MODE" -eq 0 ] && [ "$DRY_RUN" -eq 0 ] || return 0
+    case "$flavor" in
+        notifications) pattern='(usernoted|NotificationCenter)' ;;
+        knowledge) pattern='(knowledge-agent|knowledgeconstructiond|coreduetd|duetexpertd)' ;;
+        *) pattern='(intelligenceplatformd|knowledgeconstructiond|intelligencetasksd|BiomeAgent|biomed)' ;;
+    esac
+    processes="$(ps -axo comm= 2>/dev/null)" || return 1
+    if printf '%s\n' "$processes" | grep -E "(^|/)${pattern}$" >/dev/null; then return 1; fi
+    for suffix in '' -wal -shm -journal; do
+        [ -e "$db$suffix" ] || continue
+        slack_export_file_idle "$db$suffix" || return 1
+    done
+}
+
+# These stores are mixed. Never remove the database or its sidecars on failure.
+# Only known table sets and columns can reach DELETE. Checks repeat while the
+# write transaction holds a lock; triggers and views are rejected.
+activity_purge_database() {
+    local db="$1" flavor="$2" sqlite_bin tables table deletes keeps allowed='' sql version required column
+    guard_mutation_target "$db" || return 1
+    [ -e "$db" ] || return 0
+    [ -f "$db" ] || return 1
+    case "$flavor" in
+        notifications)
+            deletes='record delivered displayed'
+            keeps='app categories requests dbinfo'
+            required='record:rec_id record:app_id record:delivered_date record:data delivered:app_id delivered:list displayed:app_id displayed:list app:app_id app:identifier requests:app_id requests:list categories:app_id categories:categories dbinfo:key dbinfo:value' ;;
+        knowledge)
+            deletes='ZOBJECT ZSTRUCTUREDMETADATA ZCUSTOMMETADATA Z_4EVENT ZSOURCE ZHISTOGRAM ZHISTOGRAMVALUE'
+            keeps='ZADDITIONCHANGESET ZDELETIONCHANGESET ZCONTEXTUALCHANGEREGISTRATION ZCONTEXTUALKEYPATH ZKEYVALUE ZSYNCPEER Z_PRIMARYKEY Z_METADATA Z_MODELCACHE'
+            required='ZOBJECT:Z_PK ZOBJECT:Z_ENT ZSTRUCTUREDMETADATA:Z_PK ZSTRUCTUREDMETADATA:Z_ENT' ;;
+        events)
+            deletes='events pre_events'; keeps='grdb_migrations'
+            required='events:id events:timestamp events:payload pre_events:id pre_events:timestamp pre_events:payload grdb_migrations:identifier' ;;
+        feedback)
+            deletes='feedback deferred'; keeps='grdb_migrations sqlite_sequence'
+            required='feedback:id feedback:timestamp feedback:feedback deferred:feedbackId deferred:processorName grdb_migrations:identifier' ;;
+        *) return 1 ;;
+    esac
+    if [ "$DRY_RUN" -eq 1 ]; then
+        log_debug "[DRY RUN] would clear known $flavor history after offline/schema checks: $db"
+        CLEANED_COUNT=$((CLEANED_COUNT + 1)); return 0
+    fi
+    if ! activity_store_idle "$db" "$flavor"; then
+        log_warn "activity: store is open or its service is running; use an offline user session: $db"
+        return 1
+    fi
+    sqlite_bin="$(command -v sqlite3 2>/dev/null || true)"
+    [ -n "$sqlite_bin" ] || return 1
+    tables="$(ai_sqlite_command "$db" "$sqlite_bin" "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;" 2>/dev/null)" || return 1
+    [ -n "$tables" ] || return 1
+    while IFS= read -r table; do
+        case " $deletes $keeps " in *" $table "*) ;; *) return 1 ;; esac
+    done <<< "$tables"
+    for table in $deletes $keeps; do allowed="${allowed:+$allowed,}'$table'"; done
+    version="$(ai_sqlite_command "$db" "$sqlite_bin" 'PRAGMA schema_version;' 2>/dev/null)" || return 1
+    case "$version" in ''|*[!0-9]*) return 1 ;; esac
+    sql="PRAGMA trusted_schema=OFF; PRAGMA foreign_keys=OFF; PRAGMA secure_delete=ON;
+BEGIN IMMEDIATE;
+CREATE TEMP TABLE shredder_check(ok INTEGER CHECK(ok=1));
+INSERT INTO shredder_check SELECT schema_version=$version FROM pragma_schema_version;
+INSERT INTO shredder_check SELECT COUNT(*)=0 FROM sqlite_master WHERE type IN ('trigger','view') OR (type='table' AND name NOT IN ($allowed));"
+    for column in $required; do
+        table="${column%%:*}"; column="${column#*:}"
+        sql="$sql INSERT INTO shredder_check SELECT COUNT(*)=1 FROM pragma_table_info('$table') WHERE name='$column';"
+    done
+    for table in $deletes; do
+        case $'\n'"$tables"$'\n' in *$'\n'"$table"$'\n'*)
+            if [ "$flavor" = notifications ] && [ "$table" = record ]; then
+                # Pending requests share this database; keep their records.
+                sql="$sql DELETE FROM record WHERE delivered_date>0;"
+            else
+                sql="$sql DELETE FROM \"$table\";"
+            fi ;;
+        esac
+    done
+    sql="$sql DROP TABLE shredder_check; COMMIT;"
+    ai_sqlite_command "$db" "$sqlite_bin" "$sql" >/dev/null 2>&1 || return 1
+    ai_sqlite_command "$db" "$sqlite_bin" 'VACUUM;' >/dev/null 2>&1 || return 1
+    local checkpoint
+    checkpoint="$(ai_sqlite_command "$db" "$sqlite_bin" 'PRAGMA wal_checkpoint(TRUNCATE);' 2>/dev/null)" || return 1
+    case "$checkpoint" in 0\|*) ;; *) return 1 ;; esac
+    CLEANED_COUNT=$((CLEANED_COUNT + 1))
+}
+
+activity_clean_store() {
+    local before="$FAILED_COUNT"
+    if ! activity_purge_database "$1" "$2"; then
+        log_warn "activity: cleanup incomplete; database file retained (some rows may be cleared): $1"
+        [ "$FAILED_COUNT" -ne "$before" ] || FAILED_COUNT=$((FAILED_COUNT + 1))
+    fi
+    return 0
+}
+
+activity_notification_directory() {
+    local dir="$1" file
+    guard_mutation_target "$dir" || return 0
+    [ -d "$dir" ] || return 0
+    activity_clean_store "$dir/db" notifications
+    while read_find_path file; do
+        case "${file##*/}" in db|db-wal|db-shm|db-journal) continue ;; esac
+        log_warn "notifications: unrecognized store or archived data retained: $file"
+        [ "$DRY_RUN" -eq 1 ] || FAILED_COUNT=$((FAILED_COUNT + 1))
+    done < <(find_checked "$dir" -mindepth 1 -maxdepth 1 -print0)
+    return 0
+}
+
+module_notifications() {
+    local u h uid nc
+    while IFS=$'\t' read -r u h uid; do
+        activity_notification_directory "$h/Library/Group Containers/group.com.apple.usernoted/db2"
+    done < <(enumerate_users)
+    while read_find_path nc; do
+        activity_notification_directory "$nc/db2"
+    done < <(find_checked "$VAR_FOLDERS" -type d -name 'com.apple.notificationcenter' -print0)
+}
+
+module_activity() {
+    local u h uid path
+    purge_knowledge_db "$KNOWLEDGE_DB"
+    while IFS=$'\t' read -r u h uid; do
+        purge_knowledge_db "$h/Library/Application Support/Knowledge/knowledgeC.db"
+        activity_clean_store "$h/Library/IntelligencePlatform/eventLog.db" events
+        activity_clean_store "$h/Library/IntelligencePlatform/feedbackLog.db" feedback
+        for path in "$h/Library/Biome" "$h/Library/IntelligencePlatform/graph.db" "$h/Library/IntelligencePlatform/behaviors.db"; do
+            if [ -e "$path" ] || [ -L "$path" ]; then
+                log_warn "activity: no verified selective reset for $path; retained (incomplete cleanup)"
+                [ "$DRY_RUN" -eq 1 ] || FAILED_COUNT=$((FAILED_COUNT + 1))
+            fi
+        done
+    done < <(enumerate_users)
+    return 0
+}
+
+module_siri() {
+    log_warn 'siri: manual action required in System Settings > Apple Intelligence & Siri (or Siri) > Delete Siri & Dictation History > Delete. Internet access is required.'
+    log_warn 'siri: on macOS 27, delete Siri app conversations separately: Control-click a conversation > Delete. Conversation deletion can sync to your other devices.'
+    log_warn 'siri: no supported command-line deletion API was found; no history was counted as cleaned.'
+    [ "$DRY_RUN" -eq 1 ] || FAILED_COUNT=$((FAILED_COUNT + 1))
+    return 0
+}
+
 module_selected() {
     if [ -z "$SELECTED_MODULES" ]; then
-        case "$1" in fsevents|clipboard|headless|slackexport|terminal|finderhistory|filemetadata) return 1 ;; *) return 0 ;; esac
+        case "$1" in fsevents|clipboard|headless|slackexport|terminal|finderhistory|filemetadata|notifications|activity|siri) return 1 ;; *) return 0 ;; esac
     fi
     case ",$SELECTED_MODULES," in
         *",$1,"*) return 0 ;;
@@ -4058,6 +4181,9 @@ run_module() {
         terminal)    module_terminal ;;
         finderhistory) module_finderhistory ;;
         filemetadata) module_filemetadata ;;
+        notifications) module_notifications ;;
+        activity)    module_activity ;;
+        siri)        module_siri ;;
         *)
             log_warn "unknown module id in dispatch: $1"
             ;;
