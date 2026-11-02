@@ -296,8 +296,8 @@ check_user_artifacts_cleaned() { # check_user_artifacts_cleaned <label> <home>
   check_gone "$label: VS Code cache gone" "$home/Library/Application Support/Code/Cache/x"
   check_gone "$label: VS Code logs gone" "$home/Library/Application Support/Code/logs/y"
   check_gone "$label: JetBrains idea.log gone" "$home/Library/Logs/JetBrains/IntelliJIdea2024.1/idea.log"
-  check_gone "$label: Terminal saved state gone" "$home/Library/Saved Application State/com.apple.Terminal.savedState/windows.plist"
-  check_gone "$label: iTerm2 saved state gone" "$home/Library/Saved Application State/com.googlecode.iterm2.savedState/data"
+  check_exists_file "$label: Terminal saved state retained without opt-in" "$home/Library/Saved Application State/com.apple.Terminal.savedState/windows.plist"
+  check_exists_file "$label: iTerm2 saved state retained without opt-in" "$home/Library/Saved Application State/com.googlecode.iterm2.savedState/data"
 }
 
 check_audit() { # check_audit <root>

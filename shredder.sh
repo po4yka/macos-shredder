@@ -61,6 +61,7 @@ PURGE_SNAPSHOTS=0
 AI_DERIVED=0
 AI_EXTENDED=0
 TERMINAL_SESSIONS=0
+TERMINAL_LOG_FILES=()
 CLIPBOARD_INCLUDE_PINNED=0
 CLIPBOARD_CURRENT=0
 HEADLESS_DAYS=7
@@ -111,6 +112,7 @@ MODULE_IDS=(
     clipboard
     headless
     slackexport
+    terminal
 )
 MODULE_DESCS=(
     "Shell and REPL histories, session data"
@@ -126,12 +128,13 @@ MODULE_DESCS=(
     ".DS_Store files"
     "Wi-Fi known networks and logs"
     "Homebrew caches and logs"
-    "App caches and saved window states"
+    "App caches and logs"
     "Editor local history and Vim/Neovim state"
     "Local AI agent and editor sessions"
     "Maccy clipboard history (explicit selection only)"
     "Old Chrome Headless profiles (explicit selection only)"
     "Selected local Slack exports (explicit selection only)"
+    "Terminal saved output and selected logs (explicit selection only)"
 )
 
 # Color codes; filled by setup_colors(), left empty when colors are disabled.
@@ -722,6 +725,9 @@ Options:
       --ai-extended    Include Gemini, Antigravity, desktop AI and plugin traces
       --terminal-sessions
                         Include cmux session history in the shell module
+      --terminal-log-file PATH
+                        Select one terminal output log below /Users/<user>/.
+                        Requires --modules terminal; repeat for more files.
       --clipboard-include-pinned
                         Also clear pinned Maccy history items
       --clipboard-current
@@ -881,6 +887,11 @@ parse_args() {
                 ;;
             --ai-extended) AI_EXTENDED=1; shift ;;
             --terminal-sessions) TERMINAL_SESSIONS=1; shift ;;
+            --terminal-log-file)
+                [ $# -ge 2 ] || usage_error "--terminal-log-file requires a file"
+                add_terminal_log_file "$2"; shift 2
+                ;;
+            --terminal-log-file=*) add_terminal_log_file "${1#*=}"; shift ;;
             --clipboard-include-pinned) CLIPBOARD_INCLUDE_PINNED=1; shift ;;
             --clipboard-current) CLIPBOARD_CURRENT=1; shift ;;
             --headless-days)
@@ -915,6 +926,9 @@ parse_args() {
     done
     if [ -n "$MODULES_ARG" ]; then
         parse_modules "$MODULES_ARG"
+    fi
+    if [ "${#TERMINAL_LOG_FILES[@]}" -gt 0 ] && ! module_selected terminal; then
+        usage_error "--terminal-log-file requires explicit --modules terminal"
     fi
     case "$HEADLESS_DAYS" in ''|*[!0-9]*|0*|??????*) usage_error "--headless-days must be between 1 and 99999" ;; esac
     if module_selected slackexport; then
@@ -2416,8 +2430,6 @@ module_apps() {
                 clear_dir_contents "$jd"
             done < <(find_checked "$h/Library/Logs" -maxdepth 1 -type d -name 'JetBrains*' -print0)
         fi
-        remove_path "$h/Library/Saved Application State/com.apple.Terminal.savedState"
-        remove_path "$h/Library/Saved Application State/com.googlecode.iterm2.savedState"
     done < <(enumerate_users)
     return 0
 }
@@ -3574,9 +3586,82 @@ module_slackexport() {
     return 0
 }
 
+# --- module: terminal --------------------------------------------------------
+
+add_terminal_log_file() {
+    local path="$1" relative user
+    case "$path" in /Users/*/*) ;; *) usage_error "terminal logs must be absolute files below /Users/<user>/" ;; esac
+    case "$path" in
+        *//*|*/./*|*/../*|*/.|*/..|*/|*$'\n'*|*$'\r'*|*$'\t'*)
+            usage_error "terminal logs must have normalized file paths" ;;
+    esac
+    relative="${path#/Users/}"; user="${relative%%/*}"
+    case "$user" in ''|Shared|Guest|.*) usage_error "ineligible terminal log home" ;; esac
+    TERMINAL_LOG_FILES+=("$path")
+}
+
+terminal_clients_stopped() {
+    [ "$TEST_MODE" -eq 0 ] || return 0
+    local processes
+    processes="$(ps -axo command= 2>/dev/null)" || return 1
+    if printf '%s\n' "$processes" | grep -Ei '(^|[ /])(Terminal|iTerm2?|iTermServer[^ /]*)([[:space:]/]|$)' >/dev/null; then
+        return 1
+    fi
+    return 0
+}
+
+terminal_saved_state() {
+    local path="$1"
+    guard_mutation_target "$path" || return 0
+    [ -e "$path" ] || return 0
+    if [ ! -d "$path" ]; then
+        log_warn "terminal: expected a saved-state directory, retaining: $path"
+        FAILED_COUNT=$((FAILED_COUNT + 1))
+        return 0
+    fi
+    selected_remove_path "$path"
+}
+
+module_terminal() {
+    local u h uid path item matched
+    if ! terminal_clients_stopped; then
+        log_warn "terminal: close Terminal, iTerm2 and restoration servers before cleanup"
+        if [ "$DRY_RUN" -eq 0 ]; then
+            FAILED_COUNT=$((FAILED_COUNT + 1)); return 0
+        fi
+    fi
+    while IFS=$'\t' read -r u h uid; do
+        terminal_saved_state "$h/Library/Saved Application State/com.apple.Terminal.savedState"
+        terminal_saved_state "$h/Library/Saved Application State/com.googlecode.iterm2.savedState"
+        terminal_saved_state "$h/Library/Application Support/iTerm2/SavedState"
+    done < <(enumerate_users)
+    for item in ${TERMINAL_LOG_FILES[@]+"${TERMINAL_LOG_FILES[@]}"}; do
+        path="$SANDBOX$item"; matched=0
+        while IFS=$'\t' read -r u h uid; do
+            case "$path" in "$h"/*) matched=1 ;; esac
+        done < <(enumerate_users)
+        if [ "$matched" -eq 0 ]; then
+            log_warn "terminal: log has no eligible user home: $item"
+            FAILED_COUNT=$((FAILED_COUNT + 1)); continue
+        fi
+        guard_mutation_target "$path" || continue
+        if [ ! -f "$path" ]; then
+            log_warn "terminal: selected log is not a regular file: $path"
+            FAILED_COUNT=$((FAILED_COUNT + 1)); continue
+        fi
+        # Explicit log files can also be held by script(1) or another recorder.
+        if ! slack_export_file_idle "$path"; then
+            log_warn "terminal: selected log is open or cannot be inspected: $path"
+            FAILED_COUNT=$((FAILED_COUNT + 1)); continue
+        fi
+        selected_remove_path "$path"
+    done
+    return 0
+}
+
 module_selected() {
     if [ -z "$SELECTED_MODULES" ]; then
-        case "$1" in clipboard|headless|slackexport) return 1 ;; *) return 0 ;; esac
+        case "$1" in clipboard|headless|slackexport|terminal) return 1 ;; *) return 0 ;; esac
     fi
     case ",$SELECTED_MODULES," in
         *",$1,"*) return 0 ;;
@@ -3605,6 +3690,7 @@ run_module() {
         clipboard)   module_clipboard ;;
         headless)    module_headless ;;
         slackexport) module_slackexport ;;
+        terminal)    module_terminal ;;
         *)
             log_warn "unknown module id in dispatch: $1"
             ;;
@@ -3617,7 +3703,7 @@ run_selected_modules() {
     if [ -n "$SELECTED_MODULES" ]; then
         log_info "running modules: $(printf '%s' "$SELECTED_MODULES" | tr ',' ' ')"
     else
-        log_info "running modules: standard (clipboard, headless and slackexport require selection)"
+        log_info "running modules: standard (clipboard, headless, slackexport and terminal require selection)"
     fi
     for id in "${MODULE_IDS[@]}"; do
         if module_selected "$id"; then

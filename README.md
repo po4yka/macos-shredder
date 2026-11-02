@@ -40,7 +40,7 @@ sudo ./shredder.sh --modules shell,browser,trash --force
 ```
 
 Without `--modules`, the script runs the 16 standard modules, including `ai`
-and `editors`. The additional `clipboard`, `headless`, and `slackexport`
+and `editors`. The additional `clipboard`, `headless`, `slackexport`, and `terminal`
 modules require explicit selection. Modules run in the order listed below, regardless of the order in
 `--modules`. Without `--force`, a real run asks for confirmation. `--force`
 only skips that prompt; it does not bypass process, path, or database checks.
@@ -74,6 +74,7 @@ home directories. There is no single-user selection option.
 | `--purge-snapshots` | Delete local Time Machine snapshots before the selected modules run |
 | `--ai-derived` | Include supported memory, plans, and generated artifacts in `ai` cleanup |
 | `--ai-extended` | Include supported Gemini, Antigravity, desktop AI, context-mode, and Serena traces in `ai` cleanup |
+| `--terminal-log-file PATH` | Select one terminal log file; repeatable and requires `--modules terminal` |
 | `--terminal-sessions` | Include known cmux session and journal files in `shell` cleanup |
 | `--clipboard-include-pinned` | Include pinned Maccy items in `clipboard` cleanup |
 | `--clipboard-current` | Also clear the verified active GUI user's current clipboard |
@@ -109,11 +110,12 @@ Dry-run and `--list` do not create logs.
 | `dsstore` | `.DS_Store` files in user homes |
 | `wifi` | Remembered Wi-Fi preference files and Wi-Fi logs |
 | `brew` | Homebrew caches and logs |
-| `apps` | Selected editor caches, logs, and saved terminal states |
+| `apps` | Selected editor caches and logs |
 | `editors` | VS Code-family and JetBrains local history; Vim/Neovim persistent history |
 | `ai` | Local sessions for Claude Code, Codex, OpenCode, Cursor, Windsurf, Continue, Cline/Roo, and Aider |
 | `clipboard` | Known Maccy clipboard history; explicit selection only |
 | `headless` | Old, unlocked Chrome Headless temporary profiles; explicit selection only |
+| `terminal` | Terminal/iTerm2 saved output and explicitly selected session logs; explicit selection only |
 | `slackexport` | Known data in explicitly selected local Slack exports; explicit selection only |
 
 Mounted volumes are excluded by default. Use `--include-volumes` to include
@@ -564,7 +566,7 @@ that directory. Root-owned user directories are refused.
 ## Tests
 
 The integration suite uses temporary sandboxes for cleanup. It covers CLI
-behavior, all 19 modules, dry-run stability, process and path checks, AI and
+behavior, all 20 modules, dry-run stability, process and path checks, AI and
 editor settings preservation, shell stores, browser origins and tab recovery,
 and mounted-volume Trash. SQLite tests cover transaction rollback, active
 readers and writers, WAL cleanup, unknown schemas, and retained credentials.
@@ -585,3 +587,29 @@ directories are rejected.
 ## License
 
 This project uses the [MIT License](LICENSE).
+
+### Terminal saved output and log files
+
+Select `--modules terminal` to remove Apple Terminal and iTerm2 saved window
+state, including iTerm2 `~/Library/Application Support/iTerm2/SavedState`.
+This removes persisted scrollback and recovery state. Close Terminal, iTerm2
+and their restoration servers first. The module refuses writes if a client
+is running or the process query fails. It does not terminate sessions.
+
+Session logs can be stored anywhere selected in the terminal profile. They
+are not discovered automatically. Use repeatable `--terminal-log-file` paths
+to select exact regular files below an eligible `/Users/<user>/` home.
+Directories, links and files that are open are refused. Example:
+
+```bash
+./shredder.sh --modules terminal --terminal-log-file /Users/alice/logs/session.txt --dry-run --debug
+```
+
+Terminal preferences, profiles, iTerm2 arrangements, session archives, shell
+history and unsaved documents are retained. Shell history and cmux history
+have separate options. This module does not clear live scrollback or prove
+that APFS snapshots, backups or external log copies have been erased.
+
+The scope follows the [iTerm2 restoration implementation](https://github.com/gnachman/iTerm2/blob/master/sources/StateRestoration/iTermRestorableStateController.m),
+[session restoration documentation](https://iterm2.com/documentation-restoration.html)
+and [session logging settings](https://iterm2.com/documentation-preferences-profiles-session.html).
