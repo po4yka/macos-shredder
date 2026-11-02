@@ -510,3 +510,30 @@ test_audit_rotation() (
 )
 test_audit_rotation
 printf 'PASS: audit trails are removed only after the active record changes\n'
+
+test_dry_run_count_parity() (
+    setup_case dry-run-parity
+    mkdir -p "$USERS_DIR/alice/Library/Preferences"
+    DRY_RUN=1
+    # No recent-items domain exists, so a real run would count nothing.
+    clean_recent_items_for_user alice "$USERS_DIR/alice" ''
+    [ "$CLEANED_COUNT" -eq 0 ]
+    printf 'x\n' > "$USERS_DIR/alice/Library/Preferences/com.apple.recentitems.plist"
+    clean_recent_items_for_user alice "$USERS_DIR/alice" ''
+    [ "$CLEANED_COUNT" -eq 1 ]
+)
+test_dry_run_count_parity
+printf 'PASS: dry-run recent-item counts match a real run\n'
+
+test_knowledge_cleaned_once() (
+    setup_case knowledge-once
+    local k="$USERS_DIR/alice/Library/Application Support/Knowledge" one both
+    mkdir -p "$k"
+    sqlite3 "$k/knowledgeC.db" 'CREATE TABLE ZOBJECT (Z_PK INTEGER PRIMARY KEY);'
+    one="$(/bin/bash "$SHREDDER" --dry-run --modules usage 2>/dev/null | sed -n 's/.*would be cleaned: //p')"
+    both="$(/bin/bash "$SHREDDER" --dry-run --modules usage,activity 2>/dev/null | sed -n 's/.*would be cleaned: //p')"
+    [ -n "$one" ]
+    [ "$one" = "$both" ]
+)
+test_knowledge_cleaned_once
+printf 'PASS: usage and activity clean KnowledgeC once\n'

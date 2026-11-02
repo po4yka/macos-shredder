@@ -2321,21 +2321,21 @@ module_unified() {
         clear_dir_contents "$VAR_DB_DIAG"
         return 0
     fi
+    if ! command -v log >/dev/null 2>&1; then
+        log_debug "log(1) unavailable; nothing done (honest zero count)"
+        return 0
+    fi
     if [ "$DRY_RUN" -eq 1 ]; then
         log_debug "[DRY RUN] would erase the unified logging store (log erase --all)"
         CLEANED_COUNT=$((CLEANED_COUNT + 1))
         return 0
     fi
-    if command -v log >/dev/null 2>&1; then
-        if log erase --all >/dev/null 2>&1; then
-            log_ok "erased unified logging store"
-            CLEANED_COUNT=$((CLEANED_COUNT + 1))
-        else
-            log_warn "failed to erase unified logging store (log erase --all)"
-            FAILED_COUNT=$((FAILED_COUNT + 1))
-        fi
+    if log erase --all >/dev/null 2>&1; then
+        log_ok "erased unified logging store"
+        CLEANED_COUNT=$((CLEANED_COUNT + 1))
     else
-        log_debug "log(1) unavailable; nothing done (honest zero count)"
+        log_warn "failed to erase unified logging store (log erase --all)"
+        FAILED_COUNT=$((FAILED_COUNT + 1))
     fi
     return 0
 }
@@ -2450,8 +2450,11 @@ clean_recent_items_for_user() {
     local h="$2"
     local uid="$3"
     if [ "$DRY_RUN" -eq 1 ]; then
-        log_debug "[DRY RUN] would clear recent items for user '$u'"
-        CLEANED_COUNT=$((CLEANED_COUNT + 1))
+        # A real run counts only an existing recent-items domain.
+        if [ -e "$h/Library/Preferences/com.apple.recentitems.plist" ]; then
+            log_debug "[DRY RUN] would clear recent items for user '$u'"
+            CLEANED_COUNT=$((CLEANED_COUNT + 1))
+        fi
         return 0
     fi
     if ! command -v defaults >/dev/null 2>&1; then
@@ -4745,10 +4748,12 @@ module_notifications() {
 }
 
 module_activity() {
-    local u h uid path
-    purge_knowledge_db "$KNOWLEDGE_DB"
+    local u h uid path knowledge=1
+    # usage runs earlier and already cleans the same KnowledgeC stores.
+    if module_selected usage; then knowledge=0; fi
+    [ "$knowledge" -eq 0 ] || purge_knowledge_db "$KNOWLEDGE_DB"
     while IFS=$'\t' read -r u h uid; do
-        purge_knowledge_db "$h/Library/Application Support/Knowledge/knowledgeC.db"
+        [ "$knowledge" -eq 0 ] || purge_knowledge_db "$h/Library/Application Support/Knowledge/knowledgeC.db"
         activity_clean_store "$h/Library/IntelligencePlatform/eventLog.db" events
         activity_clean_store "$h/Library/IntelligencePlatform/feedbackLog.db" feedback
         for path in "$h/Library/Biome" "$h/Library/IntelligencePlatform/graph.db" "$h/Library/IntelligencePlatform/behaviors.db"; do
