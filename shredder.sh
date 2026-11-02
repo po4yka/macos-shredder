@@ -129,6 +129,7 @@ MODULE_IDS=(
     siri
     mailhistory
     locationhistory
+    callhistory
 )
 MODULE_DESCS=(
     "Shell and REPL histories, session data"
@@ -160,6 +161,7 @@ MODULE_DESCS=(
     "Siri and Dictation deletion instructions (manual action required)"
     "Mail recipients and attachments (manual action required)"
     "Maps searches and significant locations (manual action required)"
+    "Phone and FaceTime call history (manual action required)"
 )
 
 # Color codes; filled by setup_colors(), left empty when colors are disabled.
@@ -4221,9 +4223,22 @@ module_locationhistory() {
     return 0
 }
 
+
+# Explicit guidance: no verified automatic backend for this private store.
+module_callhistory() {
+    log_warn 'callhistory: manual action required; no automatic cleanup was performed.'
+    log_warn 'callhistory: Phone: show Calls, Missed or Unknown Callers; drag a selected call left and choose Delete.'
+    log_warn 'callhistory: FaceTime: Control-click the selected call and choose Delete (Remove from Recents on some macOS versions).'
+    log_warn 'callhistory: Deleting local call history does not remove records retained by your carrier or other participants.'
+    log_warn 'callhistory: No call-history database, contact, blocked-caller list or account was changed.'
+    log_info 'callhistory: official instructions: https://support.apple.com/en-asia/guide/phoneapp/phn33a31c85/mac'
+    [ "$DRY_RUN" -eq 1 ] || FAILED_COUNT=$((FAILED_COUNT + 1))
+    return 0
+}
+
 module_selected() {
     if [ -z "$SELECTED_MODULES" ]; then
-        case "$1" in fsevents|clipboard|headless|slackexport|terminal|finderhistory|filemetadata|documentversions|notifications|activity|siri|mailhistory|locationhistory) return 1 ;; *) return 0 ;; esac
+        case "$1" in fsevents|clipboard|headless|slackexport|terminal|finderhistory|filemetadata|documentversions|notifications|activity|siri|mailhistory|locationhistory|callhistory) return 1 ;; *) return 0 ;; esac
     fi
     case ",$SELECTED_MODULES," in
         *",$1,"*) return 0 ;;
@@ -4262,6 +4277,7 @@ run_module() {
         siri)        module_siri ;;
         mailhistory) module_mailhistory ;;
         locationhistory) module_locationhistory ;;
+        callhistory) module_callhistory ;;
         *)
             log_warn "unknown module id in dispatch: $1"
             ;;

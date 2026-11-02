@@ -159,6 +159,7 @@ recording, and shell history can independently retain records of a run.
 | `siri` | Explicit; manual | Manual Siri/Dictation deletion instructions; real runs report incomplete |
 | `mailhistory` | Explicit; manual | Mail recipients and attachments; instructions only, real runs report incomplete |
 | `locationhistory` | Explicit; manual | Maps searches and significant locations; instructions only, real runs report incomplete |
+| `callhistory` | Explicit; manual | Phone and FaceTime call history; instructions only, real runs report incomplete |
 
 Mounted volumes are excluded by default. Use `--include-volumes` to include
 their FSEvents, `.DS_Store` data, and per-user Trash in the corresponding
@@ -544,6 +545,18 @@ buttons, change permissions, or mutate these stores. [Official instructions](htt
 A real run reports exit `2` and does not add cleaned items. A dry-run prints
 the guidance and normally returns `0`. The script does not open apps, click
 buttons, change permissions, or mutate these stores. [Official instructions](https://support.apple.com/en-gb/guide/mac-help/mh35873/27/mac/27).
+
+### Phone and FaceTime call history
+
+`callhistory` is an explicit manual workflow. The module explains selected-call deletion in Phone and FaceTime. Carrier records and remote participants are outside local cleanup. It retains call databases, contacts and blocked-caller settings.
+
+```sh
+./shredder.sh --modules callhistory --dry-run
+```
+
+A real run reports exit `2` and does not add cleaned items. A dry-run prints
+the guidance and normally returns `0`. The script does not open apps, click
+buttons, change permissions, or mutate these stores. [Official instructions](https://support.apple.com/en-asia/guide/phoneapp/phn33a31c85/mac).
 
 ## Browser site data and tab recovery
 
