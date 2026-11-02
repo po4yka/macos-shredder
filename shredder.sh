@@ -1221,12 +1221,13 @@ clean_firefox_for_home() {
             purge_firefox_history "$prof/places.sqlite"
             remove_sqlite_db "$prof/cookies.sqlite"
             remove_sqlite_db "$prof/formhistory.sqlite"
+            remove_path "$prof/sessionstore.jsonlz4"
+            clear_dir_contents "$prof/sessionstore-backups"
         fi
         clear_dir_contents "$prof/cache2"
         clear_dir_contents "$prof/thumbnails"
         clear_dir_contents "$h/Library/Caches/Firefox/Profiles/${prof##*/}/cache2"
         clear_dir_contents "$h/Library/Caches/Firefox/Profiles/${prof##*/}/thumbnails"
-        clear_dir_contents "$prof/sessionstore-backups"
     done
     return 0
 }

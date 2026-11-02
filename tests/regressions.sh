@@ -158,3 +158,24 @@ test_browser_sidecars() (
 )
 test_browser_sidecars
 printf 'PASS: browser database sidecars are removed; Places recovery survives\n'
+
+test_firefox_session() (
+    setup_case firefox-session
+    local h="$USERS_DIR/alice" prof
+    prof="$h/Library/Application Support/Firefox/Profiles/custom"
+    mkdir -p "$prof/sessionstore-backups"
+    printf 'open tabs\n' > "$prof/sessionstore.jsonlz4"
+    printf 'recovery tabs\n' > "$prof/sessionstore-backups/recovery.jsonlz4"
+    # shellcheck disable=SC2329 # invoked by the sourced browser cleaner
+    browser_running() { return 0; }
+    clean_firefox_for_home "$h"
+    [ -s "$prof/sessionstore.jsonlz4" ]
+    [ -s "$prof/sessionstore-backups/recovery.jsonlz4" ]
+    /bin/bash "$SHREDDER" --dry-run --modules browser >/dev/null 2>&1
+    [ -s "$prof/sessionstore.jsonlz4" ]
+    /bin/bash "$SHREDDER" --force --modules browser >/dev/null 2>&1
+    [ ! -e "$prof/sessionstore.jsonlz4" ]
+    [ ! -e "$prof/sessionstore-backups/recovery.jsonlz4" ]
+)
+test_firefox_session
+printf 'PASS: Firefox sessions are cleared only while the browser is closed\n'
