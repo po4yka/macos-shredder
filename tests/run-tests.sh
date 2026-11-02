@@ -16,6 +16,7 @@
 #   K  trusted PATH        real mode ignores caller-provided commands
 #   L  SQLite discovery    KnowledgeC inspection errors fail closed
 #   M  Spotlight result    native dry-run reports its requested operation
+#   N  cache parent race   a replaced cache parent cannot redirect deletion
 #
 # Exit codes: 0 all phases passed; 1 one or more phases failed;
 #             77 shredder.sh not built yet.
@@ -70,6 +71,7 @@ RES_J='FAIL'
 RES_K='FAIL'
 RES_L='FAIL'
 RES_M='FAIL'
+RES_N='FAIL'
 
 phase_a_usage_validation() {
   local sb="$WORK/sandbox-a" log="$WORK/phase-a.log" rc=0 ok=1
@@ -267,6 +269,7 @@ phase_h_user_owner_commands() {
   info "exit code: $rc (expected 0)"
   [ "$rc" -eq 0 ] \
     && grep -q -- '-u #4242 --' "$calls" \
+    && grep -q -- '-u #4242 -- .*private/var/folders/' "$calls" \
     && ! grep -q '^direct:.*Users/' "$sqlite_calls" \
     && [ ! -s "$sb/Users/alice/.zsh_history" ]
 }
@@ -344,6 +347,42 @@ phase_m_spotlight_result() {
   [ "$rc" -eq 0 ] && grep -q 'Total items that would be cleaned: 1' "$log"
 }
 
+phase_n_cache_parent_race() {
+  local sb="$WORK/sandbox-n" bin="$WORK/phase-n-bin" log="$WORK/phase-n.log" rc=0
+  local cache="$sb/private/var/folders/xx/yy/C/com.apple.QuickLook.thumbnailcache"
+  local outside="$WORK/phase-n-outside" real_stat
+  real_stat="$(command -v stat)"
+  mkdir -p "$cache" "$outside" "$bin"
+  sb="$(cd "$sb" && pwd -P)"
+  cache="$sb/private/var/folders/xx/yy/C/com.apple.QuickLook.thumbnailcache"
+  : > "$sb/.macos-shredder-test-root"
+  printf 'cache entry\n' > "$cache/sentinel"
+  printf 'preserve outside file\n' > "$outside/sentinel"
+  # Replace the parent after the path guard, during the owner lookup. The
+  # actual removal must refuse the new parent, even for the same owner UID.
+  cat > "$bin/stat" <<'STUB'
+#!/bin/sh
+if [ "$3" = "$SHREDDER_CACHE_OWNER" ] && [ ! -e "$SHREDDER_RACE_DONE" ]; then
+  /bin/mv "$SHREDDER_CACHE_DIR" "$SHREDDER_CACHE_DIR.original" || exit 1
+  /bin/ln -s "$SHREDDER_OUTSIDE" "$SHREDDER_CACHE_DIR" || exit 1
+  : > "$SHREDDER_RACE_DONE"
+fi
+exec "$SHREDDER_REAL_STAT" "$@"
+STUB
+  chmod +x "$bin/stat"
+  PATH="$bin:$PATH" SHREDDER_ROOT="$sb" SHREDDER_REAL_STAT="$real_stat" \
+    SHREDDER_CACHE_OWNER="$sb/private/var/folders/xx/yy" \
+    SHREDDER_CACHE_DIR="$cache" SHREDDER_OUTSIDE="$outside" \
+    SHREDDER_RACE_DONE="$WORK/phase-n-race-done" \
+    bash "$SHREDDER" --force --modules quicklook >"$log" 2>&1 || rc=$?
+  info "cache parent race exit: $rc (expected 2)"
+  [ "$rc" -eq 2 ] \
+    && [ -f "$WORK/phase-n-race-done" ] \
+    && grep -q '^preserve outside file$' "$outside/sentinel" \
+    && grep -q '^cache entry$' "$cache.original/sentinel" \
+    && grep -q 'Failed operations: 1' "$log"
+}
+
 preserve_failure_artifacts() {
   local dest="$REPO_ROOT/tests-last-run"
   mkdir -p "$dest"
@@ -403,6 +442,10 @@ info '=== PHASE M: Spotlight result ==='
 if phase_m_spotlight_result; then RES_M='PASS'; fi
 info "PHASE M result: $RES_M"
 
+info '=== PHASE N: cache parent race ==='
+if phase_n_cache_parent_race; then RES_N='PASS'; fi
+info "PHASE N result: $RES_N"
+
 info '================ SUMMARY ================'
 info "A usage-validation : $RES_A"
 info "B module-listing   : $RES_B"
@@ -417,9 +460,10 @@ info "J sandbox-boundary: $RES_J"
 info "K trusted-path    : $RES_K"
 info "L sqlite-discovery: $RES_L"
 info "M spotlight-result: $RES_M"
+info "N cache-parent-race: $RES_N"
 
 overall=0
-for r in "$RES_A" "$RES_B" "$RES_C" "$RES_D" "$RES_E" "$RES_F" "$RES_G" "$RES_H" "$RES_I" "$RES_J" "$RES_K" "$RES_L" "$RES_M"; do
+for r in "$RES_A" "$RES_B" "$RES_C" "$RES_D" "$RES_E" "$RES_F" "$RES_G" "$RES_H" "$RES_I" "$RES_J" "$RES_K" "$RES_L" "$RES_M" "$RES_N"; do
   [ "$r" = 'PASS' ] || overall=1
 done
 if [ "$overall" -ne 0 ]; then

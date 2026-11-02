@@ -207,7 +207,7 @@ on_interrupt() {
 ###############################################################################
 
 # Refuse sandbox escapes and mutations through symlink components inside
-# user-controlled homes. Real system paths such as /var may be symlinks.
+# user-controlled homes and cache trees. System paths such as /var may be links.
 guard_mutation_target() {
     local target="$1"
     local relative boundary cursor parent
@@ -222,11 +222,13 @@ guard_mutation_target() {
         esac
     else
         case "$target" in
-            "$USERS_DIR"/*) ;;
+            "$USERS_DIR"/*)
+                relative="${target#"$USERS_DIR"/}"
+                boundary="$USERS_DIR/${relative%%/*}"
+                ;;
+            "$VAR_FOLDERS"/*) boundary="$VAR_FOLDERS" ;;
             *) return 0 ;;
         esac
-        relative="${target#"$USERS_DIR"/}"
-        boundary="$USERS_DIR/${relative%%/*}"
     fi
     cursor="$target"
     while :; do
@@ -254,20 +256,29 @@ guard_mutation_target() {
     done
 }
 
-# Run mutations below /Users as the owner of that home. The path can change
+# Run home and per-user cache mutations as their owner. The path can change
 # after guard_mutation_target() returns, so privilege reduction is the security
 # boundary for symlink races; system targets keep the caller's root context.
 run_target_command() {
     local target="$1"
     shift
-    local relative user_home owner_uid current_uid stat_bin id_bin sudo_bin
+    local relative owner_root bucket owner_uid current_uid stat_bin id_bin sudo_bin
     [ $# -gt 0 ] || return 1
     case "$target" in
-        "$USERS_DIR"/*) ;;
+        "$USERS_DIR"/*)
+            relative="${target#"$USERS_DIR"/}"
+            owner_root="$USERS_DIR/${relative%%/*}"
+            ;;
+        "$VAR_FOLDERS"/*)
+            # macOS uses /var/folders/<bucket>/<user>/ for each cache owner.
+            relative="${target#"$VAR_FOLDERS"/}"
+            case "$relative" in */*/*) ;; *) return 1 ;; esac
+            bucket="${relative%%/*}"
+            relative="${relative#*/}"
+            owner_root="$VAR_FOLDERS/$bucket/${relative%%/*}"
+            ;;
         *) "$@"; return $? ;;
     esac
-    relative="${target#"$USERS_DIR"/}"
-    user_home="$USERS_DIR/${relative%%/*}"
     if [ "$TEST_MODE" -eq 1 ]; then
         stat_bin="$(command -v stat 2>/dev/null || true)"
         id_bin="$(command -v id 2>/dev/null || true)"
@@ -278,17 +289,17 @@ run_target_command() {
         sudo_bin="/usr/bin/sudo"
     fi
     [ -x "$stat_bin" ] && [ -x "$id_bin" ] || return 1
-    owner_uid="$("$stat_bin" -f '%u' "$user_home" 2>/dev/null || true)"
+    owner_uid="$("$stat_bin" -f '%u' "$owner_root" 2>/dev/null || true)"
     case "$owner_uid" in
         ''|*[!0-9]*)
-            owner_uid="$("$stat_bin" -c '%u' "$user_home" 2>/dev/null || true)"
+            owner_uid="$("$stat_bin" -c '%u' "$owner_root" 2>/dev/null || true)"
             ;;
     esac
     case "$owner_uid" in
         ''|*[!0-9]*) return 1 ;;
     esac
     if [ "$TEST_MODE" -eq 0 ] && [ "$owner_uid" -eq 0 ]; then
-        log_warn "refusing root-owned home under $USERS_DIR: $user_home"
+        log_warn "refusing root-owned user directory: $owner_root"
         return 1
     fi
     current_uid="$("$id_bin" -u)"
@@ -298,6 +309,21 @@ run_target_command() {
     fi
     [ -x "$sudo_bin" ] || return 1
     "$sudo_bin" -u "#$owner_uid" -- "$@"
+}
+
+# Pin the cache parent as the working directory before deletion. A replacement
+# with a symlink must fail the physical-path check. Later renames cannot redirect
+# the relative rm operand to a different parent. Run this after dropping privileges.
+remove_cache_entry() {
+    local target="$1"
+    # shellcheck disable=SC2016 # variables expand in the owner-UID child shell
+    run_target_command "$target" /bin/sh -c '
+        parent=${1%/*}
+        entry=${1##*/}
+        cd -P "$parent" || exit 1
+        [ "$(pwd -P)" = "$parent" ] || exit 1
+        exec /bin/rm -rf -- "./$entry"
+    ' sh "$target"
 }
 
 # remove_path PATH - recursively delete a file/dir/symlink after an
@@ -317,7 +343,12 @@ remove_path() {
         CLEANED_COUNT=$((CLEANED_COUNT + 1))
         return 0
     fi
-    if run_target_command "$target" /bin/rm -rf -- "$target" 2>/dev/null; then
+    local result=0
+    case "$target" in
+        "$VAR_FOLDERS"/*) remove_cache_entry "$target" 2>/dev/null || result=$? ;;
+        *) run_target_command "$target" /bin/rm -rf -- "$target" 2>/dev/null || result=$? ;;
+    esac
+    if [ "$result" -eq 0 ]; then
         log_debug "removed: $target"
         CLEANED_COUNT=$((CLEANED_COUNT + 1))
     else

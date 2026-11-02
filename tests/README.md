@@ -9,7 +9,7 @@ Files:
 
 | Script                 | Role                                                        |
 | ---------------------- | ----------------------------------------------------------- |
-| `run-tests.sh`         | orchestrator — runs phases A–M, reports PASS/FAIL per phase |
+| `run-tests.sh`         | orchestrator — runs phases A–N, reports PASS/FAIL per phase |
 | `create-artifacts.sh`  | builds the deterministic sandbox fixture tree (+ manifest)  |
 | `verify-cleanup.sh`    | asserts post-cleaning state (`force`) or byte-stability (`dryrun`) |
 | `README.md`            | this document                                               |
@@ -124,6 +124,10 @@ Exit codes: `run-tests.sh` → `0` all phases passed, `1` any phase failed,
   produce exit `2` instead of continuing to `VACUUM` and reporting success.
 - **M — Spotlight result**: on Darwin, a native Spotlight dry-run must count
   the requested erase-and-rebuild operation; non-Darwin hosts skip this check.
+- **N — cache parent race**: replace a cache directory with a symlink after
+  the path check. Cleanup must return `2` and preserve both the outside file
+  and the original cache entry. Phase H also checks owner-UID execution for
+  files under `/private/var/folders`.
 
 ## Requirements
 
