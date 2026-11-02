@@ -537,3 +537,16 @@ test_knowledge_cleaned_once() (
 )
 test_knowledge_cleaned_once
 printf 'PASS: usage and activity clean KnowledgeC once\n'
+
+test_repeated_path_options() (
+    setup_case repeated-paths
+    parse_args --modules devicebackups,terminal,slackexport \
+        --device-backup /Users/alice/Backup --device-backup /Users/alice/Backup \
+        --terminal-log-file /Users/alice/t.log --terminal-log-file /Users/alice/t.log \
+        --slack-export-root /Users/alice/Slack --slack-export-root /Users/alice/Slack
+    [ "${#DEVICE_BACKUPS[@]}" -eq 1 ]
+    [ "${#TERMINAL_LOG_FILES[@]}" -eq 1 ]
+    [ "${#SLACK_EXPORT_ROOTS[@]}" -eq 1 ]
+)
+test_repeated_path_options
+printf 'PASS: repeated path options select each target once\n'

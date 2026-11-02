@@ -3706,6 +3706,17 @@ $item"
 
 # --- module: slackexport -----------------------------------------------------
 
+# path_listed PATH [ENTRY...] - succeed when PATH is one of the entries. A
+# repeated path option would otherwise process the same target twice.
+path_listed() {
+    local path="$1" entry
+    shift
+    for entry in "$@"; do
+        [ "$entry" != "$path" ] || return 0
+    done
+    return 1
+}
+
 add_slack_export_root() {
     local path="$1" relative user rest
     case "$path" in
@@ -3724,6 +3735,7 @@ add_slack_export_root() {
         ''|Desktop|Documents|Downloads|Library|Applications|Public|Pictures|Movies|Music)
             usage_error "select a dedicated Slack export directory, not a general user directory" ;;
     esac
+    path_listed "$path" ${SLACK_EXPORT_ROOTS[@]+"${SLACK_EXPORT_ROOTS[@]}"} && return 0
     SLACK_EXPORT_ROOTS+=("$path")
 }
 
@@ -3953,10 +3965,14 @@ add_selected_artifact() {
     relative="${path#/Users/}"; user="${relative%%/*}"
     case "$user" in ''|Shared|Guest|.*) usage_error "ineligible artifact home" ;; esac
     case "$kind" in
-        diagnosticexports) DIAGNOSTIC_EXPORTS+=("$path") ;;
-        aiexports) AI_EXPORTS+=("$path") ;;
-        testresults) TEST_RESULTS+=("$path") ;;
-        devicebackups) DEVICE_BACKUPS+=("$path") ;;
+        diagnosticexports)
+            path_listed "$path" ${DIAGNOSTIC_EXPORTS[@]+"${DIAGNOSTIC_EXPORTS[@]}"} || DIAGNOSTIC_EXPORTS+=("$path") ;;
+        aiexports)
+            path_listed "$path" ${AI_EXPORTS[@]+"${AI_EXPORTS[@]}"} || AI_EXPORTS+=("$path") ;;
+        testresults)
+            path_listed "$path" ${TEST_RESULTS[@]+"${TEST_RESULTS[@]}"} || TEST_RESULTS+=("$path") ;;
+        devicebackups)
+            path_listed "$path" ${DEVICE_BACKUPS[@]+"${DEVICE_BACKUPS[@]}"} || DEVICE_BACKUPS+=("$path") ;;
     esac
 }
 
@@ -4164,6 +4180,7 @@ add_terminal_log_file() {
     esac
     relative="${path#/Users/}"; user="${relative%%/*}"
     case "$user" in ''|Shared|Guest|.*) usage_error "ineligible terminal log home" ;; esac
+    path_listed "$path" ${TERMINAL_LOG_FILES[@]+"${TERMINAL_LOG_FILES[@]}"} && return 0
     TERMINAL_LOG_FILES+=("$path")
 }
 
@@ -4343,6 +4360,7 @@ add_metadata_file() {
     esac
     relative="${path#/Users/}"; user="${relative%%/*}"
     case "$user" in ''|Shared|Guest|.*) usage_error "ineligible metadata file home" ;; esac
+    path_listed "$path" ${METADATA_FILES[@]+"${METADATA_FILES[@]}"} && return 0
     METADATA_FILES+=("$path")
 }
 
