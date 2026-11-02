@@ -139,8 +139,10 @@ Exit codes: `run-tests.sh` → `0` all phases passed, `1` any phase failed,
 After phases A–O, the suite runs `regressions.sh`. It checks failed directory
 traversal, snapshot listing errors, Wi-Fi stores, zsh sessions, log rotations,
 macOS browser cache paths, SQLite sidecars, Firefox sessions, active-browser
-status, Trash symlinks, and safe logfile creation. These checks use temporary
-files; host snapshot and browser states are simulated at the function boundary.
+status, Trash symlinks, safe logfile creation, and fixture rebuilds. Three builds
+of the same fixture must produce identical manifests without nested symlinks.
+These checks use temporary files; host snapshot and browser states are simulated
+at the function boundary.
 
 - bash 3.2+ (no bash-4-only features used)
 - POSIX-ish userland: `find sort sed awk grep wc stat cp mv rm mkdir` — BSD or

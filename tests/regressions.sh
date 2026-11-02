@@ -286,3 +286,20 @@ test_logfile_safety() (
 )
 test_logfile_safety
 printf 'PASS: logs are private, new, contained, and created only after confirmation\n'
+
+test_fixture_rebuild() (
+    setup_case 'fixture rebuild'
+    local pass profile_link="$SANDBOX/Users/alice/Library/Application Support/Chromium/Default"
+    for pass in 1 2 3; do
+        /bin/bash "$SCRIPT_DIR/create-artifacts.sh" "$SANDBOX" \
+            --manifest "$WORK/rebuild-$pass.tsv" > "$WORK/rebuild-$pass.log"
+    done
+    cmp -s "$WORK/rebuild-1.tsv" "$WORK/rebuild-2.tsv"
+    cmp -s "$WORK/rebuild-1.tsv" "$WORK/rebuild-3.tsv"
+    [ "$(readlink "$profile_link")" = "$SANDBOX/escape-target/chromium-profile" ]
+    [ "$(readlink "$SANDBOX/Users/mallory")" = "$SANDBOX/escape-target/mallory-home" ]
+    [ ! -L "$SANDBOX/escape-target/chromium-profile/chromium-profile" ]
+    [ ! -L "$SANDBOX/escape-target/mallory-home/mallory-home" ]
+)
+test_fixture_rebuild
+printf 'PASS: three fixture builds produce identical files, directories, and links\n'

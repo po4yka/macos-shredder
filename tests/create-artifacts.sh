@@ -274,13 +274,14 @@ main() {
   mkdir -p "$root/escape-target/chromium-profile" \
     "$root/Users/alice/Library/Application Support/Chromium"
   printf 'must survive symlink escape test\n' > "$root/escape-target/chromium-profile/History"
-  ln -s "$root/escape-target/chromium-profile" \
+  # Replace the link itself on repeat runs, not an entry inside its target.
+  ln -sfn "$root/escape-target/chromium-profile" \
     "$root/Users/alice/Library/Application Support/Chromium/Default"
 
   # A symlink masquerading as a home directory must not be enumerated.
   mkdir -p "$root/escape-target/mallory-home"
   printf 'must survive linked-home test\n' > "$root/escape-target/mallory-home/.zsh_history"
-  ln -s "$root/escape-target/mallory-home" "$root/Users/mallory"
+  ln -sfn "$root/escape-target/mallory-home" "$root/Users/mallory"
 
   printf '[artifacts] building homes that enumerators must skip (Shared, Guest, .hiddenuser)\n'
   for special in 'Shared' 'Guest' '.hiddenuser'; do
