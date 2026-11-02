@@ -18,7 +18,10 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Check shell syntax
-        run: bash -n shredder.sh tests/*.sh
+        run: |
+          for script in shredder.sh tests/*.sh; do
+            bash -n "$script" || exit "$?"
+          done
       - name: Run integration tests
         run: ./tests/run-tests.sh
       - name: Upload failure artifacts
