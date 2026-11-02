@@ -400,6 +400,26 @@ truncate_file() {
 # process substitution (keeps counters in the current shell). Never glob
 # based, never quoted "*", and find -mindepth 1 also enumerates dotfiles,
 # so hidden entries (.Trash/.foo) are covered correctly.
+# A final empty NUL record reports a find failure to the consuming shell.
+# Paths cannot be empty. This preserves NUL-safe streaming and parent counters.
+find_checked() {
+    [ -e "$1" ] || [ -L "$1" ] || return 0
+    if ! find "$@" 2>/dev/null; then
+        log_warn "failed to enumerate all entries under: $1"
+        printf '\0'
+    fi
+}
+
+read_find_path() {
+    local variable="$1"
+    IFS= read -r -d '' "$variable" || return 1
+    if [ -z "${!variable}" ]; then
+        FAILED_COUNT=$((FAILED_COUNT + 1))
+        return 1
+    fi
+    return 0
+}
+
 clear_dir_contents() {
     local dir="$1"
     local p count=0
@@ -417,10 +437,10 @@ clear_dir_contents() {
         FAILED_COUNT=$((FAILED_COUNT + 1))
         return 0
     fi
-    while IFS= read -r -d '' p; do
+    while read_find_path p; do
         remove_path "$p"
         count=$((count + 1))
-    done < <(find "$dir" -mindepth 1 -maxdepth 1 -print0 2>/dev/null)
+    done < <(find_checked "$dir" -mindepth 1 -maxdepth 1 -print0)
     if [ "$count" -eq 0 ]; then
         log_debug "nothing to clean in: $dir"
     fi
@@ -915,7 +935,7 @@ purge_snapshots() {
 
 # --- module: shell -----------------------------------------------------------
 module_shell() {
-    local u h uid hf
+    local u h uid hf mf=""
     while IFS=$'\t' read -r u h uid; do
         [ -d "$h" ] || continue
         log_debug "shell: processing user '$u' ($h)"
@@ -956,9 +976,9 @@ SHELL_HISTORIES
         if [ -d "$h/.matlab" ]; then
             # MATLAB keeps History.xml one level per version; find instead
             # of a quoted-star glob.
-            while IFS= read -r -d '' mf; do
+            while read_find_path mf; do
                 truncate_file "$mf"
-            done < <(find "$h/.matlab" -mindepth 1 -maxdepth 2 -type f -name 'History.xml' -print0 2>/dev/null)
+            done < <(find_checked "$h/.matlab" -mindepth 1 -maxdepth 2 -type f -name 'History.xml' -print0)
         fi
         truncate_file "$h/.local/share/fish/fish_history"
         truncate_file "$h/.local/share/recently-used.xbel"
@@ -974,9 +994,9 @@ module_systemlogs() {
     for lf in system.log wifi.log install.log accountpolicy.log appfirewall.log; do
         truncate_file "$VAR_LOG/$lf"
     done
-    while IFS= read -r -d '' f; do
+    while read_find_path f; do
         truncate_file "$f"
-    done < <(find "$VAR_LOG" -maxdepth 1 -type f -name 'fsck*' -print0 2>/dev/null)
+    done < <(find_checked "$VAR_LOG" -maxdepth 1 -type f -name 'fsck*' -print0)
     clear_dir_contents "$VAR_LOG/powermanagement"
     clear_dir_contents "$VAR_LOG/com.apple.xpc.launchd"
     # System-level crash reports.
@@ -1008,11 +1028,11 @@ module_audit() {
         local n=0 dry_file dry_base
         current_target="$(readlink "$VAR_AUDIT/current" 2>/dev/null || true)"
         current_target="${current_target##*/}"
-        while IFS= read -r -d '' dry_file; do
+        while read_find_path dry_file; do
             dry_base="${dry_file##*/}"
             [ -n "$current_target" ] && [ "$dry_base" = "$current_target" ] && continue
             n=$((n + 1))
-        done < <(find "$VAR_AUDIT" -maxdepth 1 \( -type f -o -type l \) -name '[0-9]*' -print0 2>/dev/null)
+        done < <(find_checked "$VAR_AUDIT" -maxdepth 1 \( -type f -o -type l \) -name '[0-9]*' -print0)
         log_debug "[DRY RUN] would remove $n timestamped audit files under $VAR_AUDIT (preserving 'current')"
         CLEANED_COUNT=$((CLEANED_COUNT + n))
         return 0
@@ -1038,11 +1058,11 @@ module_audit() {
     # Delete timestamped trail files by basename pattern; never touch the
     # file referenced by the 'current' symlink.
     local f b
-    while IFS= read -r -d '' f; do
+    while read_find_path f; do
         b="${f##*/}"
         [ -n "$current_target" ] && [ "$b" = "$current_target" ] && continue
         remove_path "$f"
-    done < <(find "$VAR_AUDIT" -maxdepth 1 \( -type f -o -type l \) -name '[0-9]*' -print0 2>/dev/null)
+    done < <(find_checked "$VAR_AUDIT" -maxdepth 1 \( -type f -o -type l \) -name '[0-9]*' -print0)
     return 0
 }
 
@@ -1340,11 +1360,11 @@ module_usage() {
     # current per-user Knowledge store.
     purge_knowledge_db "$KNOWLEDGE_DB"
     # Notification Center databases under /private/var/folders.
-    while IFS= read -r -d '' nc; do
+    while read_find_path nc; do
         if [ -d "$nc/db2" ]; then
             clear_dir_contents "$nc/db2"
         fi
-    done < <(find "$VAR_FOLDERS" -type d -name 'com.apple.notificationcenter' -print0 2>/dev/null)
+    done < <(find_checked "$VAR_FOLDERS" -type d -name 'com.apple.notificationcenter' -print0)
     # Recent items, executed in each user's own context.
     while IFS=$'\t' read -r u h uid; do
         [ -d "$h" ] || continue
@@ -1352,9 +1372,9 @@ module_usage() {
         clean_recent_items_for_user "$u" "$h" "$uid"
         recent_dir="$h/Library/Application Support/com.apple.sharedfilelist"
         if [ -d "$recent_dir" ]; then
-            while IFS= read -r -d '' recent_file; do
+            while read_find_path recent_file; do
                 remove_path "$recent_file"
-            done < <(find "$recent_dir" -maxdepth 1 -type f -name '*Recent*.sfl*' -print0 2>/dev/null)
+            done < <(find_checked "$recent_dir" -maxdepth 1 -type f -name '*Recent*.sfl*' -print0)
         fi
     done < <(enumerate_users)
     return 0
@@ -1403,9 +1423,9 @@ module_quicklook() {
             FAILED_COUNT=$((FAILED_COUNT + 1))
         fi
     done < <(enumerate_users)
-    while IFS= read -r -d '' qc; do
+    while read_find_path qc; do
         clear_dir_contents "$qc"
-    done < <(find "$VAR_FOLDERS" -type d -name 'com.apple.QuickLook.thumbnailcache' -print0 2>/dev/null)
+    done < <(find_checked "$VAR_FOLDERS" -type d -name 'com.apple.QuickLook.thumbnailcache' -print0)
     return 0
 }
 
@@ -1428,10 +1448,10 @@ clean_dsstore_tree() {
     local base="$1"
     local f
     [ -d "$base" ] || return 0
-    while IFS= read -r -d '' f; do
+    while read_find_path f; do
         remove_path "$f"
-    done < <(find "$base" \( -name ".Spotlight-V100" -o -name ".Trashes" -o -name ".Trash" \) -prune \
-             -o -type f -name ".DS_Store" -print0 2>/dev/null)
+    done < <(find_checked "$base" \( -name ".Spotlight-V100" -o -name ".Trashes" -o -name ".Trash" \) -prune \
+             -o -type f -name ".DS_Store" -print0)
 }
 
 module_dsstore() {
@@ -1461,9 +1481,9 @@ module_wifi() {
     remove_path "$SYS_PREFS/SystemConfiguration/com.apple.airport.preferences.plist"
     remove_path "$SYS_PREFS/SystemConfiguration/com.apple.wifi.message-tracer.plist"
     clear_dir_contents "$SYS_PREFS/SystemConfiguration/com.apple.wifi.known-networks"
-    while IFS= read -r -d '' f; do
+    while read_find_path f; do
         truncate_file "$f"
-    done < <(find "$VAR_LOG" -maxdepth 1 -type f -name 'wifi.log*' -print0 2>/dev/null)
+    done < <(find_checked "$VAR_LOG" -maxdepth 1 -type f -name 'wifi.log*' -print0)
     return 0
 }
 
@@ -1490,9 +1510,9 @@ module_apps() {
         clear_dir_contents "$code_base/GPUCache"
         clear_dir_contents "$code_base/logs"
         if [ -d "$h/Library/Logs" ]; then
-            while IFS= read -r -d '' jd; do
+            while read_find_path jd; do
                 clear_dir_contents "$jd"
-            done < <(find "$h/Library/Logs" -maxdepth 1 -type d -name 'JetBrains*' -print0 2>/dev/null)
+            done < <(find_checked "$h/Library/Logs" -maxdepth 1 -type d -name 'JetBrains*' -print0)
         fi
         remove_path "$h/Library/Saved Application State/com.apple.Terminal.savedState"
         remove_path "$h/Library/Saved Application State/com.googlecode.iterm2.savedState"
@@ -1624,4 +1644,6 @@ main() {
     exit 0
 }
 
-main "$@"
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+    main "$@"
+fi

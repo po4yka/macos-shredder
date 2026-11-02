@@ -523,4 +523,5 @@ if [ "$overall" -ne 0 ]; then
   preserve_failure_artifacts
   exit 1
 fi
-info 'all phases passed'
+bash "$SCRIPT_DIR/regressions.sh"
+info 'all phases and regressions passed'
