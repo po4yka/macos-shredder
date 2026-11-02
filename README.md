@@ -62,7 +62,7 @@ Dry-run and `--list` do not create logs.
 | `wifi` | Remembered Wi-Fi preference files and Wi-Fi logs |
 | `brew` | Homebrew caches and logs |
 | `apps` | Selected editor caches, logs, and saved terminal states |
-| `ai` | Local Claude Code, Codex, and OpenCode sessions and related records |
+| `ai` | Local sessions for Claude Code, Codex, OpenCode, Cursor, Windsurf, Continue, Cline/Roo, and Aider |
 
 Mounted volumes are excluded by default. Use `--include-volumes` to include
 their FSEvents and `.DS_Store` data. Use `--purge-snapshots` only when you also
@@ -71,8 +71,9 @@ want to delete local Time Machine snapshots.
 ## AI sessions
 
 The `ai` module is included when you run all modules. It operates on each
-eligible user home. Close Claude Code, Codex, OpenCode, their desktop apps,
-and their background servers before a real run. The module refuses cleanup
+eligible user home. Close the supported agents, their desktop apps, VS Code,
+Cursor, Windsurf, JetBrains IDEs, and background servers before a real run.
+The module refuses cleanup
 if it detects a running agent or cannot inspect processes. It does not stop
 processes for you. Keep the apps closed until cleanup finishes.
 
@@ -94,6 +95,26 @@ Session cleanup covers:
 | Claude Code | Project transcripts, superseded transcripts, subagent transcripts, tool results, session indexes, prompt history, file checkpoints, pasted content, images, uploads, session environment, shell snapshots, task/team/session records, background jobs, debug logs, feedback bundles, and usage cache |
 | Codex | Sessions and archives, input history, session index, shell snapshots, attachments, dictation history, logs, known SQLite session/history/goal/queue tables, desktop session catalogs, automation run history, and session fields in desktop state JSON and its backups |
 | OpenCode | Legacy JSON sessions/messages/parts, SQLite v1 and v2 sessions/messages, tool parts, instruction payloads, attachment blobs, session events, jobs, session schedules, snapshots, tool output, logs, and prompt history |
+| Cursor | CLI chat stores, project agent transcripts, known chat rows in `ItemTable` and `cursorDiskKV`, and `composerHeaders`; includes workspace stores, named profiles, and `state.vscdb.backup` |
+| Windsurf | UUID-named conversation `.pb` files in `~/.codeium/windsurf/cascade`; other files in that directory remain |
+| Continue | The `~/.continue/sessions` store, including its session index, used by the extension and CLI |
+| Cline / Roo Code | Extension task folders and checkpoints; only `taskHistory` is removed from mixed state records. Cline's file-backed `~/.cline/data` tasks, sessions, session database, history index, and logs are also included |
+| Aider | `.aider.chat.history.md`, `.aider.input.history`, and `.aider.llm.history` found below user homes; custom history files can be selected explicitly |
+
+Extension storage is checked in VS Code, Code - Insiders, VSCodium, Cursor,
+Windsurf, and Windsurf - Next. Both default and named profiles are included.
+Only the Cline and Roo history fields are changed in ordinary editor databases.
+Cursor chat rows are cleared only in Cursor stores. Secret-storage rows,
+authentication tokens, unrelated extension state, model/provider settings,
+approval settings, editor preferences, keybindings, and workspace files remain.
+Malformed extension JSON or an unknown database schema produces exit `2`.
+Unrecognized `state.vscdb` recovery copies are retained and reported.
+
+Aider discovery does not follow directory symlinks or cross filesystems. It
+prunes `.git`, `node_modules`, `.venv`, `Library`, `.Trash`, `.cache`, `.local`,
+`.config`, and the supported agents' hidden data roots. It does not remove
+`.env`, `.aider.conf.yml`, source files, or Git history. Use an explicit root
+for a project outside the automatic scan, or `aider-history` for a custom file.
 
 Claude scratchpads and images under `/private/tmp/claude-<uid>` are included.
 The cleaner enters this directory as the home owner and checks its physical
@@ -119,7 +140,10 @@ covered. This is local cleanup, not guaranteed secure erase.
 Default roots are `~/.claude`, `~/.codex`, `~/.local/share/opencode`, and
 `~/.local/state/opencode`. Real runs also read `CLAUDE_CONFIG_DIR`,
 `CODEX_HOME`, `CODEX_SQLITE_HOME`, `XDG_DATA_HOME`, `XDG_STATE_HOME`,
-`OPENCODE_DB`, and `CLAUDE_CODE_TMPDIR` from the invoking environment.
+`OPENCODE_DB`, `CLAUDE_CODE_TMPDIR`, `CONTINUE_GLOBAL_DIR`, `CLINE_DATA_DIR`,
+`CLINE_DIR`, `AIDER_CHAT_HISTORY_FILE`, `AIDER_INPUT_HISTORY_FILE`, and
+`AIDER_LLM_HISTORY_FILE` from the invoking environment. Relative Aider history
+overrides are resolved against the invocation directory.
 `sudo` can remove these variables. Shell startup files and agent configuration
 files are not executed or parsed to find overrides. For settings stored there,
 or for another user's custom locations, pass explicit roots:
@@ -134,8 +158,22 @@ sudo ./shredder.sh --modules ai --force \
   --ai-root 'opencode-db=/Users/alice/Agent Data/custom.db'
 ```
 
-Roots are additive: default locations are still cleaned. `opencode-db` names
-a database file; the other kinds name directories. `claude-temp` names a
+Additional root kinds use these paths:
+
+| Kind | Directory or file to pass |
+| --- | --- |
+| `cursor` | Cursor CLI/project data root, normally `~/.cursor` |
+| `cursor-editor` | Cursor's `User` directory, normally `~/Library/Application Support/Cursor/User` |
+| `editor` | Another supported editor's `User` directory; cleans Cline/Roo extension history |
+| `windsurf` | Windsurf data root containing `cascade`, normally `~/.codeium/windsurf` |
+| `continue` | Continue data root containing `sessions`, normally `~/.continue` |
+| `cline` | Cline data root, normally `~/.cline/data`, or an extension storage directory |
+| `roo` | Roo extension storage directory; use this for `roo-cline.customStoragePath` |
+| `aider` | A project directory to scan for the three standard history filenames |
+| `aider-history` | One custom history file; directories are refused |
+
+Roots are additive: default locations are still cleaned. `opencode-db` and
+`aider-history` name files; the other kinds name directories. `claude-temp` names a
 dedicated scratchpad directory whose entire contents can be removed. Explicit
 roots must be normalized absolute paths below an eligible `/Users/<user>/`
 home, without symlink parents. Storage outside that boundary is refused;
@@ -162,6 +200,13 @@ create WAL sidecars; schema checks run only during real cleanup.
 Storage references: [Claude Code application data](https://code.claude.com/docs/en/claude-directory),
 [Codex session locations](https://learn.chatgpt.com/docs/reference/troubleshooting),
 and [OpenCode storage](https://opencode.ai/docs/troubleshooting/).
+Editor references: [Cursor local transcripts](https://forum.cursor.com/t/cant-access-chat-history-since-latest-update/158688/8),
+[Cursor database records](https://forum.cursor.com/t/state-vscdb-grows-to-30gb-due-to-bubbleid-agentkv-entries/167641/7),
+[Windsurf Cascade storage](https://docs.devin.ai/desktop/troubleshooting/windsurf-common-issues),
+[Continue history](https://github.com/continuedev/continue/blob/main/core/util/history.ts),
+[Cline storage](https://github.com/cline/cline/blob/main/apps/vscode/src/core/storage/disk.ts),
+[Roo task history](https://github.com/RooCodeInc/Roo-Code/blob/main/src/core/task-persistence/TaskHistoryStore.ts),
+and [Aider history options](https://aider.chat/docs/config/options.html#history-files).
 
 ## Result contract
 

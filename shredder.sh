@@ -113,7 +113,7 @@ MODULE_DESCS=(
     "Wi-Fi known networks and logs"
     "Homebrew caches and logs"
     "App caches and saved window states"
-    "Claude Code, Codex and OpenCode local sessions"
+    "Local AI agent and editor sessions"
 )
 
 # Color codes; filled by setup_colors(), left empty when colors are disabled.
@@ -656,6 +656,8 @@ Options:
                         Add an AI storage location below /Users/<user>/.
                         Kinds: claude, codex, codex-db, opencode,
                         opencode-state, opencode-db, claude-temp.
+                        Also: cursor, cursor-editor, windsurf, editor,
+                        continue, cline, roo, aider, aider-history.
                         Repeat for multiple locations; defaults are also cleaned.
 
 Environment:
@@ -1626,7 +1628,7 @@ module_apps() {
 add_ai_root() {
     local kind="${1%%=*}" path="${1#*=}" relative
     case "$kind" in
-        claude|codex|codex-db|opencode|opencode-state|opencode-db|claude-temp) ;;
+        claude|codex|codex-db|opencode|opencode-state|opencode-db|claude-temp|cursor|cursor-editor|windsurf|editor|continue|cline|roo|aider|aider-history) ;;
         *) usage_error "unknown AI root kind: $kind" ;;
     esac
     path="${path%/}"
@@ -1647,6 +1649,19 @@ add_ai_root() {
 
 ai_environment_roots() {
     [ "$TEST_MODE" -eq 0 ] || return 0
+    [ -z "${CONTINUE_GLOBAL_DIR:-}" ] || add_ai_root "continue=$CONTINUE_GLOBAL_DIR"
+    if [ -n "${CLINE_DATA_DIR:-}" ]; then
+        add_ai_root "cline=$CLINE_DATA_DIR"
+    elif [ -n "${CLINE_DIR:-}" ]; then
+        add_ai_root "cline=${CLINE_DIR%/}/data"
+    fi
+    local history_var history_path
+    for history_var in AIDER_CHAT_HISTORY_FILE AIDER_INPUT_HISTORY_FILE AIDER_LLM_HISTORY_FILE; do
+        history_path="${!history_var:-}"
+        [ -n "$history_path" ] || continue
+        case "$history_path" in /*) ;; *) history_path="$(pwd -P)/$history_path" ;; esac
+        add_ai_root "aider-history=$history_path"
+    done
     [ -z "${CLAUDE_CONFIG_DIR:-}" ] || add_ai_root "claude=$CLAUDE_CONFIG_DIR"
     [ -z "${CODEX_HOME:-}" ] || add_ai_root "codex=$CODEX_HOME"
     [ -z "${CODEX_SQLITE_HOME:-}" ] || add_ai_root "codex-db=$CODEX_SQLITE_HOME"
@@ -1684,8 +1699,8 @@ ai_agents_stopped() {
         log_warn "ai: cannot inspect running processes; cleanup refused"
         return 1
     fi
-    if printf '%s\n' "$processes" | grep -Ei '(^|[ /])(claude|codex|opencode)([[:space:]/]|$|\.js([[:space:]]|$))|/(Codex|Claude|OpenCode)\.app/' >/dev/null; then
-        log_warn "ai: close Claude Code, Codex, OpenCode and their background servers first"
+    if printf '%s\n' "$processes" | grep -Ei '(^|[ /])(claude|codex|opencode|cursor-agent|cursor|windsurf|cline|roo|cn|aider)([[:space:]/]|$|\.(js|py)([[:space:]]|$))|/(Codex|Claude|OpenCode|Cursor|Windsurf[^/]*|Visual Studio Code[^/]*|Code - Insiders|VSCodium|IntelliJ IDEA[^/]*|PyCharm[^/]*|WebStorm|GoLand|CLion|Rider|PhpStorm|RubyMine|RustRover|Android Studio)\.app/' >/dev/null; then
+        log_warn "ai: close AI agents, supported editors and their background servers first"
         return 1
     fi
     return 0
@@ -1747,6 +1762,11 @@ ai_purge_database() {
             deletes='session message part todo session_share session_v2 session_message session_part session_inbox instruction_entry instruction_state instruction_blob blob_ref blob job'
             keeps='__drizzle_migrations migration project project_directory worktree workspace account account_state control_account credential permission kv schedule event event_sequence'
             ;;
+        editor|cursor)
+            anchor=ItemTable
+            deletes=''
+            keeps='ItemTable cursorDiskKV composerHeaders'
+            ;;
         *) log_warn "ai: unsupported database: $db"; return 1 ;;
     esac
     # Opening a WAL database can create SHM files even for a read-only query.
@@ -1791,6 +1811,26 @@ CREATE TEMP TABLE shredder_check (ok INTEGER CHECK (ok=1));
 INSERT INTO shredder_check SELECT schema_version=$version FROM pragma_schema_version;
 INSERT INTO shredder_check SELECT COUNT(*)=0 FROM sqlite_master WHERE type='trigger' OR (type='table' AND name NOT IN ($allowed));"
     if [ "$mode" = clean ]; then
+        if [ "$flavor" = editor ] || [ "$flavor" = cursor ]; then
+            # VS Code Mementos contain both settings and history. Never remove
+            # an entire extension record or any secret:// row.
+            sql="$sql
+INSERT INTO shredder_check SELECT COUNT(*)=0 FROM ItemTable
+ WHERE key IN ('saoudrizwan.claude-dev','rooveterinaryinc.roo-cline')
+ AND CASE WHEN json_valid(CAST(value AS TEXT)) THEN json_type(CAST(value AS TEXT))!='object' ELSE 1 END;
+UPDATE ItemTable SET value=json_remove(CAST(value AS TEXT),'$.taskHistory')
+ WHERE key IN ('saoudrizwan.claude-dev','rooveterinaryinc.roo-cline');"
+            if [ "$flavor" = cursor ]; then
+                sql="$sql DELETE FROM ItemTable WHERE key IN ('aiService.prompts','aiService.generations','workbench.panel.aichat.view.aichat.chatdata','composer.composerData');"
+                case $'\n'"$tables"$'\n' in
+                    *$'\n'cursorDiskKV$'\n'*)
+                        sql="$sql DELETE FROM cursorDiskKV WHERE key GLOB 'composerData:*' OR key GLOB 'bubbleId:*' OR key GLOB 'checkpointId:*' OR key GLOB 'agentKv:*';" ;;
+                esac
+                case $'\n'"$tables"$'\n' in
+                    *$'\n'composerHeaders$'\n'*) sql="$sql DELETE FROM composerHeaders;" ;;
+                esac
+            fi
+        fi
         if [ "$flavor" = opencode ]; then
             sql="$sql CREATE TEMP TABLE shredder_sessions(id TEXT);"
             for table in session session_v2; do
@@ -1926,6 +1966,9 @@ SELECT json_group_object(key,$value_json) FROM atoms,json_each(doc) WHERE key NO
 json_set(json_remove(doc,'$.history','$.lastSessionId'),'$.projects',json((SELECT json_group_object(key,json_remove($value_json,'$.history','$.lastSessionId')) FROM json_each(doc,'$.projects'))))
 ELSE json_remove(doc,'$.history','$.lastSessionId') END FROM original;"
             ;;
+        task-state)
+            sql="$sql SELECT json_remove(doc,'$.taskHistory') FROM original;"
+            ;;
         *) return 1 ;;
     esac
     # shellcheck disable=SC2016
@@ -1950,16 +1993,96 @@ ELSE json_remove(doc,'$.history','$.lastSessionId') END FROM original;"
         FAILED_COUNT=$((FAILED_COUNT + 1))
     fi
 }
+# Only the standard Aider history filenames are discovered automatically. Do
+# not traverse Git objects, dependencies, application stores or other volumes.
+ai_clean_aider_tree() {
+    local root="$1" entry
+    guard_mutation_target "$root" || return 0
+    [ -d "$root" ] || return 0
+    while read_find_path entry; do remove_path "$entry"; done < <(
+        find_checked "$root" -xdev \
+            \( -type d \( -name .git -o -name node_modules -o -name .venv -o -name Library \
+                -o -name .Trash -o -name .cache -o -name .local -o -name .config \
+                -o -name .codex -o -name .claude -o -name .cursor -o -name .cline \
+                -o -name .continue -o -name .codeium \) \) -prune -o \
+            \( -type f -o -type l \) \( -name .aider.chat.history.md -o -name .aider.input.history \
+                -o -name .aider.llm.history \) -print0)
+}
+
+ai_editor_databases_in() {
+    local dir="$1" flavor="$2" mode="$3" db before="$FAILED_COUNT"
+    guard_mutation_target "$dir" || return 1
+    while read_find_path db; do
+        case "${db##*/}" in
+            *-wal|*-shm|*-journal)
+                if [ ! -f "${db%-*}" ]; then
+                    log_warn "ai: orphan editor database sidecar retained: $db"
+                    FAILED_COUNT=$((FAILED_COUNT + 1))
+                fi
+                ;;
+            state.vscdb|state.vscdb.backup)
+                if ! ai_purge_database "$db" "$flavor" "$mode"; then FAILED_COUNT=$((FAILED_COUNT + 1)); fi ;;
+            *)
+                log_warn "ai: unsupported editor database copy retained: $db"
+                FAILED_COUNT=$((FAILED_COUNT + 1)) ;;
+        esac
+    done < <(find_checked "$dir" -mindepth 1 -maxdepth 1 -name 'state.vscdb*' -print0)
+    [ "$FAILED_COUNT" -eq "$before" ]
+}
+
+# ROOT is an editor's User directory, not all of Application Support. Named
+# profiles and workspace stores use the same row-level cleanup as the default.
+ai_clean_editor() {
+    local root="$1" kind="$2" profile bucket phase before="$FAILED_COUNT" flavor=editor
+    local profiles=("$root") buckets=()
+    [ "$kind" != cursor-editor ] || flavor=cursor
+    guard_mutation_target "$root/profiles" || return 0
+    while read_find_path profile; do
+        guard_mutation_target "$profile" || continue
+        [ -d "$profile" ] || continue
+        profiles[${#profiles[@]}]="$profile"
+    done < <(find_checked "$root/profiles" -mindepth 1 -maxdepth 1 -print0)
+    for profile in "${profiles[@]}"; do
+        buckets[${#buckets[@]}]="$profile/globalStorage"
+        guard_mutation_target "$profile/workspaceStorage" || continue
+        while read_find_path bucket; do
+            guard_mutation_target "$bucket" || continue
+            [ -d "$bucket" ] || continue
+            buckets[${#buckets[@]}]="$bucket"
+        done < <(find_checked "$profile/workspaceStorage" -mindepth 1 -maxdepth 1 -print0)
+    done
+    [ "$FAILED_COUNT" -eq "$before" ] || return 0
+    for phase in check clean; do
+        for bucket in "${buckets[@]}"; do
+            ai_editor_databases_in "$bucket" "$flavor" "$phase" || return 0
+        done
+    done
+    for profile in "${profiles[@]}"; do
+        ai_clean_root cline "$profile/globalStorage/saoudrizwan.claude-dev"
+        ai_clean_root roo "$profile/globalStorage/rooveterinaryinc.roo-cline"
+    done
+}
+
 ai_clean_root() {
     local kind="$1" root="$2" project entry phase
     guard_mutation_target "$root" || return 0
     [ -e "$root" ] || return 0
-    if [ "$kind" != opencode-db ] && [ ! -d "$root" ]; then
+    if [ "$kind" != opencode-db ] && [ "$kind" != aider-history ] && [ ! -d "$root" ]; then
         log_warn "ai: expected a storage directory: $root"
         FAILED_COUNT=$((FAILED_COUNT + 1))
         return 0
     fi
     case "$kind" in
+        editor|cursor-editor)
+            ai_clean_editor "$root" "$kind"
+            return 0 ;;
+        aider) ai_clean_aider_tree "$root"; return 0 ;;
+        aider-history)
+            if [ -f "$root" ]; then remove_path "$root"; else
+                log_warn "ai: expected an Aider history file: $root"
+                FAILED_COUNT=$((FAILED_COUNT + 1))
+            fi
+            return 0 ;;
         codex|codex-db|opencode)
             # Preflight all known databases in this root before any data cleanup.
             for phase in check clean; do
@@ -1974,6 +2097,34 @@ ai_clean_root() {
             return 0 ;;
     esac
     case "$kind" in
+        cursor)
+            remove_path "$root/chats"
+            guard_mutation_target "$root/projects" || return 0
+            while read_find_path project; do
+                guard_mutation_target "$project" || continue
+                remove_path "$project/agent-transcripts"
+            done < <(find_checked "$root/projects" -mindepth 1 -maxdepth 1 -type d -print0)
+            ;;
+        windsurf)
+            # Cascade also holds local settings. Only UUID-named conversation
+            # protobufs are removed; configuration and other files survive.
+            guard_mutation_target "$root/cascade" || return 0
+            while read_find_path entry; do
+                if printf '%s\n' "${entry##*/}" | grep -E '^[[:xdigit:]]{8}(-[[:xdigit:]]{4}){3}-[[:xdigit:]]{12}\.pb$' >/dev/null; then
+                    remove_path "$entry"
+                fi
+            done < <(find_checked "$root/cascade" -mindepth 1 -maxdepth 1 -print0)
+            ;;
+        continue) remove_path "$root/sessions" ;;
+        cline|roo)
+            ai_clean_json "$root/globalState.json" task-state
+            ai_remove_list "$root" tasks checkpoints
+            if [ "$kind" = cline ]; then
+                ai_remove_list "$root" sessions logs
+                remove_path "$root/state/taskHistory.json"
+                remove_sqlite_db "$root/db/sessions.db"
+            fi
+            ;;
         claude)
             guard_mutation_target "$root/projects" || return 0
             while read_find_path project; do
@@ -2072,6 +2223,15 @@ module_ai() {
         ai_clean_root codex "$h/.codex"
         ai_clean_root opencode "$h/.local/share/opencode"
         ai_clean_root opencode-state "$h/.local/state/opencode"
+        ai_clean_root cursor "$h/.cursor"
+        ai_clean_root windsurf "$h/.codeium/windsurf"
+        ai_clean_root continue "$h/.continue"
+        ai_clean_root cline "$h/.cline/data"
+        ai_clean_aider_tree "$h"
+        for kind in Code 'Code - Insiders' VSCodium Cursor Windsurf 'Windsurf - Next'; do
+            if [ "$kind" = Cursor ]; then item='cursor-editor'; else item=editor; fi
+            ai_clean_root "$item" "$h/Library/Application Support/$kind/User"
+        done
         clear_dir_contents "$h/Library/Logs/com.openai.codex"
         ai_claude_temp "$h" "$uid"
         for item in "${AI_ROOTS[@]:-}"; do

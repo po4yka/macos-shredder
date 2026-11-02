@@ -525,4 +525,5 @@ if [ "$overall" -ne 0 ]; then
 fi
 bash "$SCRIPT_DIR/regressions.sh"
 bash "$SCRIPT_DIR/ai-sessions.sh"
+bash "$SCRIPT_DIR/ai-editors.sh"
 info 'all phases and regressions passed'

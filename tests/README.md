@@ -12,6 +12,7 @@ Files:
 | `run-tests.sh`         | orchestrator — runs phases A–O, reports PASS/FAIL per phase |
 | `regressions.sh`       | additional cleanup, status, and logfile safety checks |
 | `ai-sessions.sh`       | AI session cleanup, database safety, and preservation checks |
+| `ai-editors.sh`        | Cursor/Windsurf/Continue/Cline/Roo/Aider cleanup and preservation |
 | `create-artifacts.sh`  | builds the deterministic sandbox fixture tree (+ manifest)  |
 | `verify-cleanup.sh`    | asserts post-cleaning state (`force`) or byte-stability (`dryrun`) |
 | `README.md`            | this document                                               |
@@ -153,6 +154,13 @@ roots, repeat runs, multiple users, corrupt/unsupported schemas, database locks,
 missing SQLite, symlinks, hard links, JSON errors, and Claude scratchpads.
 Process detection is tested with controlled command listings; no host agent
 is stopped and no host session store is changed.
+
+`ai-editors.sh` adds four groups for editor databases, file-based session stores,
+failure safety, and custom roots/process guards. It checks named profiles,
+workspace databases, backups, binary secret values, nested settings, unchanged
+approval flags, Cascade settings, extension configuration, Aider source/Git
+preservation, dry-run stability, and repeat cleanup. Unknown schemas, malformed
+extension state, symlinked stores, WAL links, and recovery copies must fail closed.
 
 - bash 3.2+ (no bash-4-only features used)
 - POSIX-ish userland: `find sort sed awk grep wc stat cp mv rm mkdir` — BSD or

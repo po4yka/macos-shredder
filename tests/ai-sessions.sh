@@ -337,6 +337,7 @@ printf 'PASS: malformed/hard-linked JSON retained; default modules clean both us
 test_environment_roots() (
     setup environment
     unset CLAUDE_CONFIG_DIR CODEX_HOME CODEX_SQLITE_HOME XDG_DATA_HOME XDG_STATE_HOME OPENCODE_DB CLAUDE_CODE_TMPDIR
+    unset CONTINUE_GLOBAL_DIR CLINE_DATA_DIR CLINE_DIR AIDER_CHAT_HISTORY_FILE AIDER_INPUT_HISTORY_FILE AIDER_LLM_HISTORY_FILE
     CLAUDE_CONFIG_DIR='/Users/User Space/custom claude'
     CODEX_HOME='/Users/User Space/custom code'
     CODEX_SQLITE_HOME='/Users/User Space/database'
