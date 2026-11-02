@@ -1086,9 +1086,7 @@ clean_safari_for_home() {
     if browser_running "Safari"; then
         log_warn "Safari is running; skipping Safari database deletion (data integrity)"
     else
-        remove_path "$saf/History.db"
-        remove_path "$saf/History.db-wal"
-        remove_path "$saf/History.db-shm"
+        remove_sqlite_db "$saf/History.db"
         remove_path "$saf/History.db-lock"
         remove_path "$saf/Downloads.plist"
         remove_path "$saf/TopSites.plist"
@@ -1102,14 +1100,10 @@ clean_safari_for_home() {
 
 clean_chrome_profile_dbs() {
     local prof="$1"
-    remove_path "$prof/History"
-    remove_path "$prof/History-wal"
-    remove_path "$prof/History-shm"
-    remove_path "$prof/Cookies"
-    remove_path "$prof/Cookies-wal"
-    remove_path "$prof/Cookies-shm"
-    remove_path "$prof/Top Sites"
-    remove_path "$prof/Web Data"
+    remove_sqlite_db "$prof/History"
+    remove_sqlite_db "$prof/Cookies"
+    remove_sqlite_db "$prof/Top Sites"
+    remove_sqlite_db "$prof/Web Data"
     return 0
 }
 
@@ -1225,10 +1219,8 @@ clean_firefox_for_home() {
         [ -d "$prof" ] || continue
         if [ "$skip_dbs" -eq 0 ]; then
             purge_firefox_history "$prof/places.sqlite"
-            remove_path "$prof/cookies.sqlite"
-            remove_path "$prof/cookies.sqlite-wal"
-            remove_path "$prof/cookies.sqlite-shm"
-            remove_path "$prof/formhistory.sqlite"
+            remove_sqlite_db "$prof/cookies.sqlite"
+            remove_sqlite_db "$prof/formhistory.sqlite"
         fi
         clear_dir_contents "$prof/cache2"
         clear_dir_contents "$prof/thumbnails"

@@ -288,7 +288,7 @@ phase_i_symlink_refusal() {
   SHREDDER_ROOT="$sb" bash "$SHREDDER" --force --modules browser >"$log" 2>&1 || rc=$?
   info "exit code: $rc (expected 2)"
   [ "$rc" -eq 2 ] \
-    && grep -q 'Failed operations: 11' "$log" \
+    && grep -q 'Failed operations: 19' "$log" \
     && grep -q 'must survive symlink escape test' "$sb/escape-target/chromium-profile/History" \
     && grep -q 'must survive linked-home test' "$sb/escape-target/mallory-home/.zsh_history"
 }

@@ -136,3 +136,25 @@ test_browser_cache_paths() (
 )
 test_browser_cache_paths
 printf 'PASS: macOS cache paths for all supported browsers are cleared\n'
+
+test_browser_sidecars() (
+    setup_case browser-sidecars
+    local h="$USERS_DIR/alice" db suffix
+    local chrome="$h/Library/Application Support/Google/Chrome/Default"
+    local firefox="$h/Library/Application Support/Firefox/Profiles/custom"
+    mkdir -p "$chrome" "$firefox" "$h/Library/Safari"
+    for db in "$chrome/History" "$chrome/Cookies" "$chrome/Top Sites" "$chrome/Web Data" \
+        "$firefox/cookies.sqlite" "$firefox/formhistory.sqlite" "$h/Library/Safari/History.db"; do
+        for suffix in '' -wal -shm -journal; do
+            printf 'trace\n' > "$db$suffix"
+        done
+    done
+    printf 'preserve bookmark recovery\n' > "$firefox/places.sqlite-wal"
+    /bin/bash "$SHREDDER" --dry-run --modules browser >/dev/null 2>&1
+    [ -s "$chrome/Web Data-wal" ]
+    /bin/bash "$SHREDDER" --force --modules browser >/dev/null 2>&1
+    [ -z "$(find "$h" -type f ! -name places.sqlite-wal -print)" ]
+    grep -q '^preserve bookmark recovery$' "$firefox/places.sqlite-wal"
+)
+test_browser_sidecars
+printf 'PASS: browser database sidecars are removed; Places recovery survives\n'
