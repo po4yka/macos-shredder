@@ -2343,7 +2343,7 @@ module_unified() {
 
 # --- module: fileevents ------------------------------------------------------
 module_fileevents() {
-    local u h uid qdb
+    local u h uid qdb sql
     # Restart lsd first so it releases quarantine database handles before the
     # SQLite cleanup attempts to acquire a write lock.
     if [ "$TEST_MODE" -eq 0 ] && [ "$DRY_RUN" -eq 0 ]; then
@@ -2352,14 +2352,16 @@ module_fileevents() {
         fi
     fi
     # Launch Services quarantine databases (system + per-user copies).
+    # Overwrite deleted rows, rebuild the file and truncate the WAL so that
+    # removed events do not stay in free pages or the -wal sidecar. One
+    # statement per database also gives one count per database.
+    sql="PRAGMA secure_delete=ON; DELETE FROM LSQuarantineEvent; VACUUM; PRAGMA wal_checkpoint(TRUNCATE);"
     qdb="$SYS_PREFS/com.apple.LaunchServices.QuarantineEventsV2"
-    sqlite_purge "$qdb" "DELETE FROM LSQuarantineEvent;"
-    sqlite_purge "$qdb" "VACUUM;"
+    sqlite_purge "$qdb" "$sql"
     while IFS=$'\t' read -r u h uid; do
         [ -d "$h" ] || continue
         qdb="$h/Library/Preferences/com.apple.LaunchServices.QuarantineEventsV2"
-        sqlite_purge "$qdb" "DELETE FROM LSQuarantineEvent;"
-        sqlite_purge "$qdb" "VACUUM;"
+        sqlite_purge "$qdb" "$sql"
     done < <(enumerate_users)
     return 0
 }

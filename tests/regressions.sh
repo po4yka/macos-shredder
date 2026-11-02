@@ -550,3 +550,19 @@ test_repeated_path_options() (
 )
 test_repeated_path_options
 printf 'PASS: repeated path options select each target once\n'
+
+test_quarantine_purge() (
+    setup_case quarantine
+    local db="$USERS_DIR/alice/Library/Preferences/com.apple.LaunchServices.QuarantineEventsV2"
+    mkdir -p "${db%/*}"
+    sqlite3 "$db" "PRAGMA journal_mode=WAL; CREATE TABLE LSQuarantineEvent(x);
+        INSERT INTO LSQuarantineEvent VALUES ('https://SHREDTEST-QUARANTINE.invalid/file');" >/dev/null
+    module_fileevents
+    [ "$CLEANED_COUNT" -eq 1 ]
+    [ "$FAILED_COUNT" -eq 0 ]
+    [ "$(sqlite3 "$db" 'SELECT COUNT(*) FROM LSQuarantineEvent;')" -eq 0 ]
+    if [ -s "$db-wal" ]; then return 1; fi
+    if grep -q SHREDTEST-QUARANTINE "$db"; then return 1; fi
+)
+test_quarantine_purge
+printf 'PASS: quarantine events are deleted securely and counted once\n'
