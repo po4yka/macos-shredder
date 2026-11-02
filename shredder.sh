@@ -59,6 +59,12 @@ INCLUDE_VOLUMES=0
 INCLUDE_EXTENSION_DATA=0
 PURGE_SNAPSHOTS=0
 AI_DERIVED=0
+AI_EXTENDED=0
+TERMINAL_SESSIONS=0
+CLIPBOARD_INCLUDE_PINNED=0
+CLIPBOARD_CURRENT=0
+HEADLESS_DAYS=7
+SLACK_EXPORT_ROOTS=()
 AI_ROOTS=()
 AI_CLAUDE_TMP_BASE=/private/tmp
 TEST_MODE=0
@@ -102,6 +108,9 @@ MODULE_IDS=(
     apps
     editors
     ai
+    clipboard
+    headless
+    slackexport
 )
 MODULE_DESCS=(
     "Shell and REPL histories, session data"
@@ -120,6 +129,9 @@ MODULE_DESCS=(
     "App caches and saved window states"
     "Editor local history and Vim/Neovim state"
     "Local AI agent and editor sessions"
+    "Maccy clipboard history (explicit selection only)"
+    "Old Chrome Headless profiles (explicit selection only)"
+    "Selected local Slack exports (explicit selection only)"
 )
 
 # Color codes; filled by setup_colors(), left empty when colors are disabled.
@@ -364,6 +376,42 @@ remove_path() {
     else
         log_warn "failed to remove: $target"
         FAILED_COUNT=$((FAILED_COUNT + 1))
+    fi
+    return 0
+}
+
+# Remove an explicitly selected export or temporary-profile target. Pin the
+# physical parent after dropping privileges and do not enter nested mounts.
+selected_remove_path() {
+    local target="$1"
+    guard_mutation_target "$target" || return 0
+    [ -e "$target" ] || return 0
+    if [ "$DRY_RUN" -eq 1 ]; then
+        log_debug "[DRY RUN] would remove selected data: $target"
+        CLEANED_COUNT=$((CLEANED_COUNT + 1))
+        return 0
+    fi
+    # shellcheck disable=SC2016
+    if run_target_command "$target" /bin/sh -c '
+        parent=${1%/*}; entry=${1##*/}
+        cd -P "$parent" || exit 1
+        [ "$(pwd -P)" = "$parent" ] || exit 1
+        [ ! -L "./$entry" ] || exit 1
+        if [ "$(uname -s)" = Darwin ]; then
+            parent_device=$(stat -f %d .) || exit 1
+            child_device=$(stat -f %d "./$entry") || exit 1
+        else
+            parent_device=$(stat -c %d .) || exit 1
+            child_device=$(stat -c %d "./$entry") || exit 1
+        fi
+        [ "$parent_device" = "$child_device" ] || exit 1
+        find "./$entry" -xdev -depth -delete
+    ' sh "$target" >/dev/null 2>&1; then
+        CLEANED_COUNT=$((CLEANED_COUNT + 1))
+        log_debug "removed selected data: $target"
+    else
+        FAILED_COUNT=$((FAILED_COUNT + 1))
+        log_warn "failed to remove selected data: $target"
     fi
     return 0
 }
@@ -660,7 +708,7 @@ Options:
   -n, --dry-run         Preview only: report what would be cleaned, change nothing
   -d, --debug           Enable verbose debug output
   -l, --list            List available modules and exit
-  -m, --modules IDS     Comma-separated module ids to run (default: all).
+  -m, --modules IDS     Comma-separated module ids (default: standard modules).
                         See '--list' for valid ids; unknown ids are rejected.
   -f, --force           Do not ask for confirmation (auto-answer yes)
       --logfile FILE    Create a new private operation log after confirmation
@@ -671,6 +719,17 @@ Options:
                         reset extension settings and extension sign-ins.
       --purge-snapshots Delete local Time Machine snapshots before selected modules
       --ai-derived     Also remove AI memory, plans and generated artifacts
+      --ai-extended    Include Gemini, Antigravity, desktop AI and plugin traces
+      --terminal-sessions
+                        Include cmux session history in the shell module
+      --clipboard-include-pinned
+                        Also clear pinned Maccy history items
+      --clipboard-current
+                        Also clear the active console user's current clipboard
+      --headless-days N Keep Chrome Headless profiles newer than N days (default 7)
+      --slack-export-root PATH
+                        Select a local export directory below /Users/<user>/.
+                        Requires --modules slackexport; repeat for more roots.
       --ai-root KIND=PATH
                         Add an AI storage location below /Users/<user>/.
                         Kinds: claude, codex, codex-db, opencode,
@@ -820,6 +879,20 @@ parse_args() {
                 AI_DERIVED=1
                 shift
                 ;;
+            --ai-extended) AI_EXTENDED=1; shift ;;
+            --terminal-sessions) TERMINAL_SESSIONS=1; shift ;;
+            --clipboard-include-pinned) CLIPBOARD_INCLUDE_PINNED=1; shift ;;
+            --clipboard-current) CLIPBOARD_CURRENT=1; shift ;;
+            --headless-days)
+                [ $# -ge 2 ] || usage_error "--headless-days requires a positive integer"
+                HEADLESS_DAYS="$2"; shift 2
+                ;;
+            --headless-days=*) HEADLESS_DAYS="${1#*=}"; shift ;;
+            --slack-export-root)
+                [ $# -ge 2 ] || usage_error "--slack-export-root requires a directory"
+                add_slack_export_root "$2"; shift 2
+                ;;
+            --slack-export-root=*) add_slack_export_root "${1#*=}"; shift ;;
             --ai-root)
                 [ $# -ge 2 ] || usage_error "--ai-root requires KIND=PATH"
                 add_ai_root "$2"
@@ -842,6 +915,12 @@ parse_args() {
     done
     if [ -n "$MODULES_ARG" ]; then
         parse_modules "$MODULES_ARG"
+    fi
+    case "$HEADLESS_DAYS" in ''|*[!0-9]*|0*|??????*) usage_error "--headless-days must be between 1 and 99999" ;; esac
+    if module_selected slackexport; then
+        [ "${#SLACK_EXPORT_ROOTS[@]}" -gt 0 ] || usage_error "slackexport requires --slack-export-root"
+    elif [ "${#SLACK_EXPORT_ROOTS[@]}" -gt 0 ]; then
+        usage_error "--slack-export-root requires explicit --modules slackexport"
     fi
 }
 
@@ -1049,6 +1128,153 @@ purge_snapshots() {
 # counters stay in the current shell), guarded by [ -d "$h" ].
 ###############################################################################
 
+# --- module: clipboard -------------------------------------------------------
+# Maccy uses Storage.sqlite in its application-support directory. SwiftData and
+# older Core Data stores use the same HistoryItem/HistoryItemContent relation.
+# Only the known schema is accepted; pins, preferences and metadata survive.
+clipboard_maccy_stopped() {
+    [ "$TEST_MODE" -eq 0 ] || return 0
+    local processes
+    processes="$(ps -axo command= 2>/dev/null)" || return 1
+    if printf '%s\n' "$processes" | grep -Ei '(^|[ /])Maccy([[:space:]/]|$|\.app/)' >/dev/null; then
+        return 1
+    fi
+    return 0
+}
+
+clipboard_purge_maccy() {
+    local db="$1" suffix sqlite_bin tables table sql result stem version
+    guard_mutation_target "$db" || return 1
+    if [ ! -e "$db" ]; then
+        for suffix in -wal -shm -journal; do
+            if [ -e "$db$suffix" ] || [ -L "$db$suffix" ]; then
+                log_warn "clipboard: orphan database sidecar retained: $db$suffix"
+                return 1
+            fi
+        done
+        return 0
+    fi
+    # Models with external binary storage need an app-specific object reader.
+    # Do not erase rows while leaving unknown external clipboard blobs behind.
+    stem="${db##*/}"; stem="${stem%.sqlite}"
+    for suffix in "$stem" ".$stem"; do
+        if [ -e "${db%/*}/${suffix}_SUPPORT" ] || [ -L "${db%/*}/${suffix}_SUPPORT" ]; then
+            log_warn "clipboard: external object store is unsupported; database retained: $db"
+            return 1
+        fi
+    done
+    if [ "$DRY_RUN" -eq 1 ]; then
+        log_debug "[DRY RUN] would clear Maccy history (schema checked on real run): $db"
+        CLEANED_COUNT=$((CLEANED_COUNT + 1))
+        return 0
+    fi
+    sqlite_bin="$(command -v sqlite3 2>/dev/null || true)"
+    [ -n "$sqlite_bin" ] || return 1
+    result="$(ai_sqlite_command "$db" "$sqlite_bin" "BEGIN; SELECT name FROM sqlite_master WHERE type='table' ORDER BY name; PRAGMA schema_version; COMMIT;" 2>/dev/null)" || return 1
+    version="${result##*$'\n'}"
+    tables="${result%$'\n'*}"
+    case "$version" in ''|*[!0-9]*) return 1 ;; esac
+    for table in ZHISTORYITEM ZHISTORYITEMCONTENT; do
+        case $'\n'"$tables"$'\n' in *$'\n'"$table"$'\n'*) ;; *) return 1 ;; esac
+    done
+    sql="PRAGMA trusted_schema=OFF;
+PRAGMA foreign_keys=OFF;
+PRAGMA secure_delete=ON;
+BEGIN IMMEDIATE;
+CREATE TEMP TABLE shredder_clipboard_check(ok INTEGER CHECK(ok=1));
+INSERT INTO shredder_clipboard_check SELECT schema_version=$version FROM pragma_schema_version;
+INSERT INTO shredder_clipboard_check SELECT COUNT(*)=0 FROM sqlite_master
+ WHERE type IN ('trigger','view') OR (type='table' AND name NOT IN
+ ('ZHISTORYITEM','ZHISTORYITEMCONTENT','Z_METADATA','Z_MODELCACHE','Z_PRIMARYKEY','ACHANGE','ATRANSACTION','ATRANSACTIONSTRING'));
+INSERT INTO shredder_clipboard_check SELECT COUNT(*)=0 FROM pragma_table_info('ZHISTORYITEM')
+ WHERE name NOT IN ('Z_PK','Z_ENT','Z_OPT','ZNUMBEROFCOPIES','ZFIRSTCOPIEDAT','ZLASTCOPIEDAT','ZAPPLICATION','ZPIN','ZTITLE');
+INSERT INTO shredder_clipboard_check SELECT COUNT(*)=0 FROM pragma_table_info('ZHISTORYITEMCONTENT')
+ WHERE name NOT IN ('Z_PK','Z_ENT','Z_OPT','ZITEM','ZTYPE','ZVALUE');
+INSERT INTO shredder_clipboard_check SELECT COUNT(*)=3 FROM pragma_table_info('ZHISTORYITEM') WHERE name IN ('Z_PK','ZPIN','ZTITLE');
+INSERT INTO shredder_clipboard_check SELECT COUNT(*)=4 FROM pragma_table_info('ZHISTORYITEMCONTENT') WHERE name IN ('Z_PK','ZITEM','ZTYPE','ZVALUE');
+CREATE TEMP TABLE shredder_clipboard_ids(id INTEGER PRIMARY KEY);
+INSERT INTO shredder_clipboard_ids SELECT Z_PK FROM ZHISTORYITEM WHERE ZPIN IS NULL;"
+    if [ "${CLIPBOARD_INCLUDE_PINNED:-0}" -eq 1 ]; then
+        sql="$sql INSERT OR IGNORE INTO shredder_clipboard_ids SELECT Z_PK FROM ZHISTORYITEM;"
+    fi
+    sql="$sql
+DELETE FROM ZHISTORYITEMCONTENT WHERE ZITEM IN (SELECT id FROM shredder_clipboard_ids)
+ OR ZITEM IS NULL OR ZITEM NOT IN (SELECT Z_PK FROM ZHISTORYITEM);
+DELETE FROM ZHISTORYITEM WHERE Z_PK IN (SELECT id FROM shredder_clipboard_ids);"
+    # SwiftData's persistent change log can retain deleted clipboard values.
+    # These are transaction records, not model data or application preferences.
+    for table in ACHANGE ATRANSACTION ATRANSACTIONSTRING; do
+        case $'\n'"$tables"$'\n' in
+            *$'\n'"$table"$'\n'*) sql="$sql DELETE FROM $table;" ;;
+        esac
+    done
+    sql="$sql
+DROP TABLE shredder_clipboard_ids;
+DROP TABLE shredder_clipboard_check;
+COMMIT;
+VACUUM;
+PRAGMA wal_checkpoint(TRUNCATE);"
+    result="$(ai_sqlite_command "$db" "$sqlite_bin" "$sql" 2>/dev/null)" || return 1
+    result="${result##*$'\n'}"
+    case "$result" in 0\|*) ;; *) return 1 ;; esac
+    CLEANED_COUNT=$((CLEANED_COUNT + 1))
+    log_debug "cleared Maccy history; preferences and model metadata retained: $db"
+    return 0
+}
+
+clipboard_clear_current() {
+    # The system pasteboard belongs to a GUI session. Never use the invoking
+    # root session, a sudo-only fallback, or every user's bootstrap namespace.
+    if [ "$TEST_MODE" -eq 1 ]; then
+        log_debug "test mode: native pasteboard command skipped"
+        return 0
+    fi
+    local console_uid u h uid found=0
+    console_uid="$(/usr/bin/stat -f '%u' /dev/console 2>/dev/null)" || return 1
+    case "$console_uid" in ''|0|*[!0-9]*) return 1 ;; esac
+    [ -x /bin/launchctl ] && [ -x /usr/bin/sudo ] && [ -x /usr/bin/pbcopy ] || return 1
+    /bin/launchctl print "gui/$console_uid" >/dev/null 2>&1 || return 1
+    while IFS=$'\t' read -r u h uid; do
+        [ "$uid" = "$console_uid" ] || continue
+        guard_mutation_target "$h" || return 1
+        if [ "$DRY_RUN" -eq 1 ]; then
+            log_debug "[DRY RUN] would clear the active GUI user's current pasteboard"
+        else
+            /bin/launchctl asuser "$uid" /usr/bin/sudo -u "#$uid" -- \
+                /usr/bin/env HOME="$h" /usr/bin/pbcopy < /dev/null || return 1
+        fi
+        CLEANED_COUNT=$((CLEANED_COUNT + 1))
+        found=1
+        break
+    done < <(enumerate_users)
+    [ "$found" -eq 1 ]
+}
+
+module_clipboard() {
+    local u h uid root
+    if ! clipboard_maccy_stopped; then
+        log_warn "clipboard: close Maccy before cleanup; process-query failures also block cleanup"
+        if [ "$DRY_RUN" -eq 0 ]; then
+            FAILED_COUNT=$((FAILED_COUNT + 1))
+            return 0
+        fi
+    fi
+    while IFS=$'\t' read -r u h uid; do
+        for root in "$h/Library/Containers/org.p0deje.Maccy/Data/Library/Application Support/Maccy" \
+                    "$h/Library/Application Support/Maccy"; do
+            if ! clipboard_purge_maccy "$root/Storage.sqlite"; then
+                log_warn "clipboard: Maccy cleanup refused or incomplete: $root/Storage.sqlite"
+                FAILED_COUNT=$((FAILED_COUNT + 1))
+            fi
+        done
+    done < <(enumerate_users)
+    if [ "${CLIPBOARD_CURRENT:-0}" -eq 1 ] && ! clipboard_clear_current; then
+        log_warn "clipboard: current pasteboard not cleared; no verified active GUI user or command failed"
+        FAILED_COUNT=$((FAILED_COUNT + 1))
+    fi
+    return 0
+}
+
 # --- module: shell -----------------------------------------------------------
 # Clear only known shell-history tables. Atuin's record store also contains
 # aliases, scripts and KV entries, so it must never be removed as a whole.
@@ -1172,6 +1398,39 @@ shell_stores_stopped() {
     return 0
 }
 
+terminal_sessions_stopped() {
+    [ "$TEST_MODE" -eq 0 ] || return 0
+    local processes
+    processes="$(ps -axo command= 2>/dev/null)" || return 1
+    # Include the app executable, CLI and helper processes. A failed process
+    # query also blocks cleanup; --force must not bypass this check.
+    if printf '%s\n' "$processes" | grep -Ei '(^|[ /])(cmux|cmuxterm)([[:space:]/.-]|$)' >/dev/null; then
+        return 1
+    fi
+    return 0
+}
+
+shell_clean_terminal_sessions() {
+    local h="$1" root entry
+    root="$h/Library/Application Support/cmux"
+    if guard_mutation_target "$root"; then
+        for entry in terminal-history session-history session-com.cmuxterm.app-scrollback; do
+            if [ -e "$root/$entry" ] && [ ! -d "$root/$entry" ]; then
+                log_warn "shell: expected a terminal history directory, retaining: $root/$entry"
+                FAILED_COUNT=$((FAILED_COUNT + 1))
+                continue
+            fi
+            clear_dir_contents "$root/$entry"
+        done
+    fi
+    root="$h/.cmuxterm"
+    guard_mutation_target "$root" || return 0
+    for entry in workstream.jsonl events.jsonl events.jsonl.1 agent-journal-dead-letter.jsonl; do
+        shell_remove_history_file "$root/$entry"
+    done
+    return 0
+}
+
 shell_remove_history_file() {
     if [ -e "$1" ] && [ ! -f "$1" ] && [ ! -L "$1" ]; then
         log_warn "shell: expected a history file, retaining: $1"
@@ -1218,12 +1477,19 @@ shell_clean_alternative_stores() {
 }
 
 module_shell() {
-    local u h uid hf mf="" extended=1
+    local u h uid hf mf="" extended=1 terminals="${TERMINAL_SESSIONS:-0}"
     if ! shell_stores_stopped; then
         log_warn "shell: close Atuin, fish, Nushell, Xonsh and IPython before extended history cleanup"
         if [ "$DRY_RUN" -eq 0 ]; then
             FAILED_COUNT=$((FAILED_COUNT + 1))
             extended=0
+        fi
+    fi
+    if [ "$terminals" -eq 1 ] && ! terminal_sessions_stopped; then
+        log_warn "shell: close cmux and its background processes before terminal session cleanup"
+        if [ "$DRY_RUN" -eq 0 ]; then
+            FAILED_COUNT=$((FAILED_COUNT + 1))
+            terminals=0
         fi
     fi
     while IFS=$'\t' read -r u h uid; do
@@ -1261,6 +1527,7 @@ SHELL_HISTORIES
         clear_dir_contents "$h/.bash_sessions"
         clear_dir_contents "$h/.zsh_sessions"
         if [ "$extended" -eq 1 ]; then shell_clean_alternative_stores "$h"; fi
+        if [ "$terminals" -eq 1 ]; then shell_clean_terminal_sessions "$h"; fi
         truncate_file "$h/.julia/logs/repl_history.jl"
         truncate_file "$h/.ghc/ghci_history"
         if [ -d "$h/.matlab" ]; then
@@ -1849,7 +2116,7 @@ clean_recent_items_for_user() {
 }
 
 module_usage() {
-    local u h uid nc recent_dir recent_file
+    local u h uid nc recent_dir recent_file app_recent_dir
     # Keep the legacy system store for older macOS releases, then handle the
     # current per-user Knowledge store.
     purge_knowledge_db "$KNOWLEDGE_DB"
@@ -1866,9 +2133,19 @@ module_usage() {
         clean_recent_items_for_user "$u" "$h" "$uid"
         recent_dir="$h/Library/Application Support/com.apple.sharedfilelist"
         if [ -d "$recent_dir" ]; then
+            guard_mutation_target "$recent_dir" || continue
             while read_find_path recent_file; do
                 remove_path "$recent_file"
             done < <(find_checked "$recent_dir" -maxdepth 1 -type f -name '*Recent*.sfl*' -print0)
+            # Per-application lists are stored one level below the shared
+            # list root. Do not recurse into arbitrary directories or remove
+            # favorites and future formats in this mixed parent directory.
+            app_recent_dir="$recent_dir/com.apple.LSSharedFileList.ApplicationRecentDocuments"
+            guard_mutation_target "$app_recent_dir" || continue
+            while read_find_path recent_file; do
+                remove_path "$recent_file"
+            done < <(find_checked "$app_recent_dir" -maxdepth 1 -type f \
+                \( -name '*.sfl2' -o -name '*.sfl3' -o -name '*.sfl4' \) -print0)
         fi
     done < <(enumerate_users)
     return 0
@@ -2053,6 +2330,62 @@ module_wifi() {
     while read_find_path f; do
         truncate_file "$f"
     done < <(find_checked "$VAR_LOG" -maxdepth 1 -type f -name 'wifi.log*' -print0)
+    return 0
+}
+
+# --- module: headless (explicit selection only) -------------------------------
+headless_stopped() {
+    [ "$TEST_MODE" -eq 0 ] || return 0
+    local processes
+    if ! processes="$(ps -axo command= 2>/dev/null)"; then
+        log_warn "headless: cannot inspect browser processes; cleanup refused"
+        return 1
+    fi
+    if printf '%s\n' "$processes" | grep -Ei '(^|/)(Google Chrome|Chromium|chrome|chromium|chrome-headless-shell|headless_shell)([ /]|$)|/(Google Chrome|Chromium|Microsoft Edge|Brave Browser)[^/]*\.app/|(^|[ /])(@playwright|playwright(-core)?|puppeteer(-core)?|chrome-devtools-mcp)([ /]|$)' >/dev/null; then
+        log_warn "headless: close browsers and browser automation first"
+        return 1
+    fi
+    return 0
+}
+
+module_headless() {
+    local u h uid root profile leaf recent age
+    if [ "$DRY_RUN" -eq 0 ] && ! headless_stopped; then
+        FAILED_COUNT=$((FAILED_COUNT + 1))
+        return 0
+    fi
+    age=$((HEADLESS_DAYS - 1))
+    while IFS=$'\t' read -r u h uid; do
+        root="$h/Library/Application Support/Google/Chrome-headless"
+        guard_mutation_target "$root" || continue
+        [ -d "$root" ] || continue
+        while read_find_path profile; do
+            leaf="${profile##*/}"
+            leaf="${leaf#scoped_dir}"
+            case "$leaf" in ''|*[!a-zA-Z0-9]*) continue ;; esac
+            guard_mutation_target "$profile" || continue
+            # A profile must match the known layout. Never remove an arbitrary
+            # similarly named directory, a live lock, or a mounted child.
+            [ -d "$profile/Default" ] && [ -f "$profile/Local State" ] || continue
+            guard_mutation_target "$profile/Default" || continue
+            guard_mutation_target "$profile/Local State" || continue
+            if [ -e "$profile/SingletonLock" ] || [ -L "$profile/SingletonLock" ] \
+                || [ -e "$profile/SingletonSocket" ] || [ -L "$profile/SingletonSocket" ]; then
+                log_warn "headless: locked profile retained: $profile"
+                FAILED_COUNT=$((FAILED_COUNT + 1))
+                continue
+            fi
+            # Directory age alone does not show recent writes to existing
+            # files. Retain any profile with a recently modified descendant.
+            if ! recent="$(find "$profile" -xdev -mtime -"$HEADLESS_DAYS" -print -quit 2>/dev/null)"; then
+                log_warn "headless: cannot check profile age: $profile"
+                FAILED_COUNT=$((FAILED_COUNT + 1))
+                continue
+            fi
+            [ -z "$recent" ] || continue
+            selected_remove_path "$profile"
+        done < <(find_checked "$root" -mindepth 1 -maxdepth 1 -type d -name 'scoped_dir*' -mtime +"$age" -print0)
+    done < <(enumerate_users)
     return 0
 }
 
@@ -2733,8 +3066,220 @@ ai_claude_temp() {
     fi
 }
 
+# Additional desktop and plugin stores are opt-in. Never print process command
+# lines: they can contain prompts, account identifiers or authentication data.
+ai_extended_stopped() {
+    [ "$TEST_MODE" -eq 0 ] || return 0
+    local processes
+    if ! processes="$(ps -axo command= 2>/dev/null)"; then
+        log_warn "ai: cannot inspect extended clients; cleanup refused"
+        return 1
+    fi
+    if printf '%s\n' "$processes" | grep -Ei '(^|[ /])(gemini|antigravity(-cli|-ide)?|agy|serena|serena-mcp-server|context-mode|mcp-server-context-mode)([[:space:]/.]|$)|/(ChatGPT[^/]*|Antigravity[^/]*|Claude)\.app/|@google/gemini-cli/|/context-mode/|/serena/' >/dev/null; then
+        log_warn "ai: close Gemini, Antigravity, ChatGPT, Claude Desktop, Serena and context-mode servers first"
+        return 1
+    fi
+    return 0
+}
+
+# The schemas below contain session data only. Keep schema/version tables and
+# delete through SQLite, including virtual FTS tables and their shadow pages.
+# Observed Antigravity/context-mode schemas were inspected without reading rows.
+ai_extended_database() {
+    local db="$1" flavor="$2" mode="${3:-clean}" anchor deletes keeps='' table tables allowed='' sql sqlite_bin version checkpoint
+    if [ ! -e "$db" ] && [ ! -L "$db" ]; then
+        for table in -wal -shm -journal; do
+            if [ -e "$db$table" ] || [ -L "$db$table" ]; then
+                log_warn "ai: orphan extended database sidecar retained: $db$table"
+                return 1
+            fi
+        done
+        return 0
+    fi
+    guard_mutation_target "$db" || return 1
+    case "$flavor" in
+        antigravity-summary)
+            anchor=conversation_summaries
+            deletes='conversation_summaries conversations_fts'
+            keeps='search_schema_version conversations_fts_config conversations_fts_content conversations_fts_data conversations_fts_docsize conversations_fts_idx'
+            ;;
+        antigravity-session)
+            anchor=trajectory_meta
+            deletes='battle_mode_infos executor_metadata gen_metadata parent_references steps trajectory_meta trajectory_metadata_blob'
+            ;;
+        context-session)
+            anchor=session_events
+            deletes='session_events session_meta session_resume tool_calls'
+            keeps=sqlite_sequence
+            ;;
+        context-content)
+            anchor=sources
+            deletes='chunks chunks_trigram sources vocabulary'
+            keeps='sqlite_sequence chunks_config chunks_content chunks_data chunks_docsize chunks_idx chunks_trigram_config chunks_trigram_content chunks_trigram_data chunks_trigram_docsize chunks_trigram_idx'
+            ;;
+        *) return 1 ;;
+    esac
+    if [ "$DRY_RUN" -eq 1 ]; then
+        if [ "$mode" = clean ]; then
+            log_debug "[DRY RUN] would clear extended session database (schema checked on real run): $db"
+            CLEANED_COUNT=$((CLEANED_COUNT + 1))
+        fi
+        return 0
+    fi
+    sqlite_bin="$(command -v sqlite3 2>/dev/null || true)"
+    [ -n "$sqlite_bin" ] || { log_warn "ai: sqlite3 required; database retained: $db"; return 1; }
+    tables="$(ai_sqlite_command "$db" "$sqlite_bin" "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;" 2>/dev/null)" || return 1
+    case $'\n'"$tables"$'\n' in *$'\n'"$anchor"$'\n'*) ;; *) return 1 ;; esac
+    while IFS= read -r table; do
+        case " $deletes $keeps " in *" $table "*) ;; *) return 1 ;; esac
+    done <<< "$tables"
+    for table in $deletes $keeps; do allowed="${allowed:+$allowed,}'$table'"; done
+    version="$(ai_sqlite_command "$db" "$sqlite_bin" 'PRAGMA schema_version;' 2>/dev/null)" || return 1
+    case "$version" in ''|*[!0-9]*) return 1 ;; esac
+    sql="PRAGMA trusted_schema=OFF; PRAGMA foreign_keys=OFF; PRAGMA secure_delete=ON;
+BEGIN IMMEDIATE;
+CREATE TEMP TABLE extended_check(ok INTEGER CHECK(ok=1));
+INSERT INTO extended_check SELECT schema_version=$version FROM pragma_schema_version;
+INSERT INTO extended_check SELECT COUNT(*)=0 FROM sqlite_master WHERE type IN ('trigger','view') OR (type='table' AND name NOT IN ($allowed));"
+    if [ "$mode" = clean ]; then
+        for table in $deletes; do
+            case $'\n'"$tables"$'\n' in
+                *$'\n'"$table"$'\n'*) sql="$sql DELETE FROM \"$table\"; INSERT INTO extended_check SELECT COUNT(*)=0 FROM \"$table\";" ;;
+            esac
+        done
+    fi
+    sql="$sql DROP TABLE extended_check; COMMIT;"
+    ai_sqlite_command "$db" "$sqlite_bin" "$sql" >/dev/null 2>&1 || return 1
+    [ "$mode" = clean ] || return 0
+    ai_sqlite_command "$db" "$sqlite_bin" 'VACUUM;' >/dev/null 2>&1 || return 1
+    checkpoint="$(ai_sqlite_command "$db" "$sqlite_bin" 'PRAGMA wal_checkpoint(TRUNCATE);' 2>/dev/null)" || return 1
+    case "$checkpoint" in 0\|*) ;; *) return 1 ;; esac
+    CLEANED_COUNT=$((CLEANED_COUNT + 1))
+    return 0
+}
+
+ai_extended_db_directory() {
+    local root="$1" flavor="$2" mode="$3" entry before="$FAILED_COUNT"
+    guard_mutation_target "$root" || return 1
+    while read_find_path entry; do
+        case "${entry##*/}" in
+            *.db)
+                if ! ai_extended_database "$entry" "$flavor" "$mode"; then
+                    log_warn "ai: unsupported or busy extended session database retained: $entry"
+                    FAILED_COUNT=$((FAILED_COUNT + 1))
+                fi ;;
+            *.db-wal|*.db-shm|*.db-journal)
+                if [ ! -f "${entry%-*}" ]; then
+                    log_warn "ai: orphan extended database sidecar retained: $entry"
+                    FAILED_COUNT=$((FAILED_COUNT + 1))
+                fi ;;
+            *)
+                log_warn "ai: unknown extended database recovery copy retained: $entry"
+                FAILED_COUNT=$((FAILED_COUNT + 1)) ;;
+        esac
+    done < <(find_checked "$root" -mindepth 1 -maxdepth 1 -name '*.db*' -print0)
+    [ "$before" -eq "$FAILED_COUNT" ]
+}
+
+ai_extended_antigravity() {
+    local root="$1" phase entry before="$FAILED_COUNT" stem
+    guard_mutation_target "$root" || return 0
+    [ -d "$root" ] || return 0
+    for phase in check clean; do
+        if ! ai_extended_database "$root/conversation_summaries.db" antigravity-summary "$phase"; then
+            log_warn "ai: unsupported or busy conversation index retained: $root/conversation_summaries.db"
+            FAILED_COUNT=$((FAILED_COUNT + 1))
+            return 0
+        fi
+        ai_extended_db_directory "$root/conversations" antigravity-session "$phase" || return 0
+    done
+    [ "$before" -eq "$FAILED_COUNT" ] || return 0
+    # Older releases use one protobuf file per conversation. Never delete
+    # arbitrary settings or other files from this directory.
+    while read_find_path entry; do
+        stem="${entry##*/}"; stem="${stem%.pb}"
+        if printf '%s\n' "$stem" | grep -E '^[[:xdigit:]]{8}(-[[:xdigit:]]{4}){3}-[[:xdigit:]]{12}$' >/dev/null; then
+            remove_path "$entry"
+        fi
+    done < <(find_checked "$root/conversations" -mindepth 1 -maxdepth 1 -name '*.pb' -print0)
+    ai_remove_list "$root" history.jsonl cli.log agyhub_summaries_proto.pb jetbox_summaries_proto.pb
+}
+
+ai_extended_context() {
+    local root="$1" phase entry
+    guard_mutation_target "$root" || return 0
+    [ -d "$root" ] || return 0
+    for phase in check clean; do
+        ai_extended_db_directory "$root/sessions" context-session "$phase" || return 0
+        ai_extended_db_directory "$root/content" context-content "$phase" || return 0
+    done
+    while read_find_path entry; do remove_path "$entry"; done < <(
+        find_checked "$root/sessions" -mindepth 1 -maxdepth 1 -type f -name 'stats-pid-[0-9]*.json' -print0)
+}
+
+ai_extended_home() {
+    local h="$1" root project entry account org name
+    # Gemini leaves binaries and project metadata beside its conversation
+    # directories. Only known conversation/checkpoint paths are selected.
+    root="$h/.gemini/tmp"
+    guard_mutation_target "$root" || return 0
+    while read_find_path project; do
+        guard_mutation_target "$project" || continue
+        [ -d "$project" ] || continue
+        ai_remove_list "$project" chats checkpoints logs.json
+    done < <(find_checked "$root" -mindepth 1 -maxdepth 1 -print0)
+    if [ "$AI_DERIVED" -eq 1 ]; then
+        # This is Gemini's dedicated shadow Git store, not project Git data.
+        remove_path "$h/.gemini/history"
+    fi
+    for name in antigravity antigravity-cli antigravity-ide; do
+        ai_extended_antigravity "$h/.gemini/$name"
+    done
+    root="$h/Library/Application Support/com.openai.chat"
+    guard_mutation_target "$root" || return 0
+    while read_find_path entry; do
+        name="${entry##*/}"
+        if printf '%s\n' "$name" | grep -E '^(conversations|drafts)-v[0-9]+-.+$' >/dev/null; then
+            guard_mutation_target "$entry" || continue
+            [ ! -d "$entry" ] || remove_path "$entry"
+        fi
+    done < <(find_checked "$root" -mindepth 1 -maxdepth 1 -print0)
+    # The desktop parent also contains plugins, schedules and preferences.
+    # Session directories alone are disposable; account/org directories remain.
+    root="$h/Library/Application Support/Claude/local-agent-mode-sessions"
+    guard_mutation_target "$root" || return 0
+    while read_find_path account; do
+        name="${account##*/}"
+        printf '%s\n' "$name" | grep -E '^[[:xdigit:]]{8}(-[[:xdigit:]]{4}){3}-[[:xdigit:]]{12}$' >/dev/null || continue
+        guard_mutation_target "$account" || continue
+        while read_find_path org; do
+            name="${org##*/}"
+            printf '%s\n' "$name" | grep -E '^[[:xdigit:]]{8}(-[[:xdigit:]]{4}){3}-[[:xdigit:]]{12}$' >/dev/null || continue
+            guard_mutation_target "$org" || continue
+            while read_find_path entry; do
+                name="${entry##*/}"
+                if printf '%s\n' "$name" | grep -E '^local_[[:xdigit:]]{8}(-[[:xdigit:]]{4}){3}-[[:xdigit:]]{12}$' >/dev/null; then
+                    guard_mutation_target "$entry" || continue
+                    remove_path "$entry"
+                fi
+            done < <(find_checked "$org" -mindepth 1 -maxdepth 1 -print0)
+            ai_clean_json "$org/.claude.json" claude
+            while read_find_path entry; do ai_clean_json "$entry" claude; done < <(
+                find_checked "$org" -mindepth 1 -maxdepth 1 -name '.claude.json.backup*' -print0)
+        done < <(find_checked "$account" -mindepth 1 -maxdepth 1 -type d -print0)
+    done < <(find_checked "$root" -mindepth 1 -maxdepth 1 -type d -print0)
+    ai_extended_context "$h/.claude/context-mode"
+    clear_dir_contents "$h/.serena/logs"
+}
+
 module_ai() {
     local u h uid item path kind matched processed=''
+    if [ "${AI_EXTENDED:-0}" -eq 1 ] && ! ai_extended_stopped; then
+        if [ "$DRY_RUN" -eq 0 ]; then
+            FAILED_COUNT=$((FAILED_COUNT + 1))
+            return 0
+        fi
+    fi
     if ! ai_agents_stopped; then
         if [ "$DRY_RUN" -eq 0 ]; then
             FAILED_COUNT=$((FAILED_COUNT + 1))
@@ -2763,6 +3308,7 @@ module_ai() {
         done
         clear_dir_contents "$h/Library/Logs/com.openai.codex"
         ai_claude_temp "$h" "$uid"
+        if [ "${AI_EXTENDED:-0}" -eq 1 ]; then ai_extended_home "$h"; fi
         for item in "${AI_ROOTS[@]:-}"; do
             [ -n "$item" ] || continue
             kind="${item%%=*}"; path="$SANDBOX${item#*=}"
@@ -2788,8 +3334,250 @@ $item"
 # SECTION: Dispatch, summary and main flow
 ###############################################################################
 
+# --- module: slackexport -----------------------------------------------------
+
+add_slack_export_root() {
+    local path="$1" relative user rest
+    case "$path" in
+        /Users/*/*) ;;
+        *) usage_error "Slack export roots must be absolute paths below /Users/<user>/" ;;
+    esac
+    case "$path" in
+        *//*|*/./*|*/../*|*/.|*/..|*/|*$'\n'*|*$'\r'*|*$'\t'*)
+            usage_error "Slack export roots must be normalized directory paths" ;;
+    esac
+    relative="${path#/Users/}"
+    user="${relative%%/*}"
+    rest="${relative#*/}"
+    case "$user" in ''|Shared|Guest|.*) usage_error "ineligible Slack export home" ;; esac
+    case "$rest" in
+        ''|Desktop|Documents|Downloads|Library|Applications|Public|Pictures|Movies|Music)
+            usage_error "select a dedicated Slack export directory, not a general user directory" ;;
+    esac
+    SLACK_EXPORT_ROOTS+=("$path")
+}
+
+slack_exporters_stopped() {
+    [ "$TEST_MODE" -eq 0 ] || return 0
+    local processes
+    processes="$(ps -axo command= 2>/dev/null)" || return 1
+    if printf '%s\n' "$processes" | grep -Ei '^[[:space:]]*([^[:space:]]*/)?(slackdump([^[:space:]/]*)?|slack[-_](export|sync)[^[:space:]/]*)([[:space:]]|$)|^[[:space:]]*([^[:space:]]*/)?(bash|sh|zsh|python[0-9.]*|node|ruby|perl)([[:space:]]+-[^[:space:]]+)*[[:space:]]+[^[:space:]]*(slack[-_](export|sync)|slack[_-]dump/[^[:space:]]*(sync|export))[^[:space:]]*([[:space:]]|$)' >/dev/null; then
+        return 1
+    fi
+    return 0
+}
+
+# Read JSON through an in-memory SQLite database. Export SQLite files are never
+# opened, including in dry-run. SQL path literals are escaped, never evaluated.
+slack_export_json() {
+    local path="$1" kind="$2" escaped sqlite_bin sql quote="'"
+    guard_mutation_target "$path" || return 1
+    [ -f "$path" ] && [ ! -L "$path" ] || return 1
+    sqlite_bin="$(command -v sqlite3 2>/dev/null || true)"
+    [ -n "$sqlite_bin" ] || return 1
+    escaped="${path//$quote/$quote$quote}"
+    sql="CREATE TEMP TABLE metadata(doc TEXT NOT NULL CHECK(json_valid(doc) AND json_type(doc)='array'));
+INSERT INTO metadata VALUES(CAST(readfile('$escaped') AS TEXT));
+CREATE TEMP TABLE valid(ok INTEGER CHECK(ok=1));
+INSERT INTO valid SELECT COUNT(*)=0 FROM metadata,json_each(doc) WHERE type!='object';"
+    if [ "$kind" = channels ]; then
+        sql="$sql
+CREATE TEMP TABLE names(name TEXT NOT NULL);
+INSERT INTO names SELECT CASE WHEN json_type(value,'$.name')='text' THEN json_extract(value,'$.name') WHEN json_type(value,'$.id')='text' THEN json_extract(value,'$.id') END FROM metadata,json_each(doc);
+INSERT INTO valid SELECT COUNT(*)=0 FROM names WHERE name='' OR name IN ('.','..') OR substr(name,1,1)='.' OR instr(name,'/')>0 OR instr(name,char(92))>0 OR instr(name,char(0))>0 OR instr(name,char(9))>0 OR instr(name,char(10))>0 OR instr(name,char(13))>0;
+SELECT DISTINCT name FROM names;"
+    elif [ "$kind" = users ]; then
+        sql="$sql INSERT INTO valid SELECT COUNT(*)=0 FROM metadata,json_each(doc) WHERE json_type(value,'$.id') IS NOT 'text';"
+    fi
+    run_target_command "$path" "$sqlite_bin" -batch -bail :memory: "$sql" 2>/dev/null
+}
+
+slack_export_plan_standard() {
+    local root="$1" file name names entry metadata=() channels=() users=0 lists=0 before="$FAILED_COUNT"
+    for name in users.json org_users.json; do
+        file="$root/$name"
+        [ -e "$file" ] || [ -L "$file" ] || continue
+        slack_export_json "$file" users >/dev/null || return 1
+        metadata+=("$file")
+        users=$((users + 1))
+    done
+    [ "$users" -gt 0 ] || return 1
+    for name in channels.json groups.json dms.json mpims.json; do
+        file="$root/$name"
+        [ -e "$file" ] || [ -L "$file" ] || continue
+        names="$(slack_export_json "$file" channels)" || return 1
+        metadata+=("$file")
+        lists=$((lists + 1))
+        while IFS= read -r name; do
+            [ -n "$name" ] || continue
+            channels+=("$name")
+        done <<< "$names"
+    done
+    [ "$lists" -gt 0 ] || return 1
+    # Validate every target before deleting any metadata or message file.
+    for name in ${channels[@]+"${channels[@]}"}; do
+        guard_mutation_target "$root/$name" || return 1
+        if [ -e "$root/$name" ] && [ ! -d "$root/$name" ]; then return 1; fi
+        while read_find_path entry; do
+            case "${entry##*/}" in
+                [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9].json)
+                    slack_export_json "$entry" messages >/dev/null || return 1
+                    slack_targets+=("$entry") ;;
+            esac
+        done < <(find_checked "$root/$name" -mindepth 1 -maxdepth 1 -print0)
+    done
+    [ "$FAILED_COUNT" -eq "$before" ] || return 1
+    slack_targets+=("${metadata[@]}")
+    return 0
+}
+
+slack_export_sqlite_header() {
+    local file="$1" signature
+    guard_mutation_target "$file" || return 1
+    [ -f "$file" ] && [ ! -L "$file" ] || return 1
+    signature="$(run_target_command "$file" /usr/bin/od -An -tx1 -N16 "$file" 2>/dev/null | tr -d '[:space:]')" || return 1
+    [ "$signature" = 53514c69746520666f726d6174203300 ]
+}
+
+slack_export_file_idle() {
+    [ "$TEST_MODE" -eq 0 ] && [ "$DRY_RUN" -eq 0 ] || return 0
+    command -v lsof >/dev/null 2>&1 || return 1
+    local result rc=0
+    result="$(lsof -t -- "$1" 2>&1)" || rc=$?
+    # lsof returns 1 with no output when no process has the file open. Errors
+    # and partial process visibility are retained as failures, not ignored.
+    [ "$rc" -eq 1 ] && [ -z "$result" ]
+}
+
+slack_export_plan_dump() {
+    local root="$1" file entry suffix name found=0 media=0 before="$FAILED_COUNT" databases=()
+    for entry in archive snapshots; do
+        guard_mutation_target "$root/$entry" || return 1
+        if [ -e "$root/$entry" ] && [ ! -d "$root/$entry" ]; then return 1; fi
+    done
+    [ -d "$root/archive" ] || return 1
+    file="$root/archive/slackdump.sqlite"
+    if [ -e "$file" ] || [ -L "$file" ]; then
+        slack_export_sqlite_header "$file" || return 1
+        databases+=("$file")
+        found=1
+    fi
+    while read_find_path file; do
+        name="${file##*/}"
+        if printf '%s\n' "$name" | grep -E '^slackdump_[0-9]{8}_[0-9]{6}\.sqlite$' >/dev/null; then
+            slack_export_sqlite_header "$file" || return 1
+            databases+=("$file")
+            found=1
+        fi
+    done < <(find_checked "$root/snapshots" -mindepth 1 -maxdepth 1 -print0)
+    # The media directories are the archive signature and remain after cleanup.
+    for name in __uploads __avatars; do
+        file="$root/archive/$name"
+        guard_mutation_target "$file" || return 1
+        [ -e "$file" ] || continue
+        [ -d "$file" ] || return 1
+        media=$((media + 1))
+        while read_find_path entry; do
+            [ "$found" -eq 1 ] || return 1
+            guard_mutation_target "$entry" || return 1
+            slack_targets+=("$entry")
+        done < <(find_checked "$file" -mindepth 1 -maxdepth 1 -print0)
+    done
+    for file in ${databases[@]+"${databases[@]}"}; do
+        for suffix in '' -wal -shm -journal; do
+            [ -e "$file$suffix" ] || [ -L "$file$suffix" ] || continue
+            guard_mutation_target "$file$suffix" || return 1
+            [ -f "$file$suffix" ] || return 1
+            slack_export_file_idle "$file$suffix" || return 1
+            slack_targets+=("$file$suffix")
+        done
+    done
+    # Orphan sidecars must not be deleted or silently treated as a clean export.
+    while read_find_path file; do
+        case "${file##*/}" in
+            slackdump.sqlite-wal|slackdump.sqlite-shm|slackdump.sqlite-journal)
+                [ -f "$root/archive/slackdump.sqlite" ] || return 1 ;;
+        esac
+    done < <(find_checked "$root/archive" -mindepth 1 -maxdepth 1 -print0)
+    if [ "$found" -eq 0 ] && [ "$media" -eq 0 ]; then
+        # An empty archive remains after a download-free export is cleared.
+        # Unknown nonempty archives still have no supported signature.
+        while read_find_path entry; do return 1; done < <(find_checked "$root/archive" -mindepth 1 -maxdepth 1 -print0)
+    fi
+    while read_find_path file; do
+        name="${file##*/}"
+        if printf '%s\n' "$name" | grep -E '^slackdump_[0-9]{8}_[0-9]{6}\.sqlite-(wal|shm|journal)$' >/dev/null; then
+            [ -f "${file%-*}" ] || return 1
+        fi
+    done < <(find_checked "$root/snapshots" -mindepth 1 -maxdepth 1 -print0)
+    while read_find_path file; do
+        name="${file##*/}"
+        if printf '%s\n' "$name" | grep -E '^(users-T[A-Z0-9]+\.json|channels-T[A-Z0-9]+\.txt)$' >/dev/null; then
+            [ "$found" -eq 1 ] || return 1
+            guard_mutation_target "$file" || return 1
+            [ -f "$file" ] || return 1
+            slack_targets+=("$file")
+        fi
+    done < <(find_checked "$root" -mindepth 1 -maxdepth 1 -print0)
+    [ "$FAILED_COUNT" -eq "$before" ]
+}
+
+module_slackexport() {
+    local requested root u h uid eligible file entry failed before slack_targets=()
+    if ! slack_exporters_stopped; then
+        log_warn "slackexport: close exporters and sync jobs before cleanup"
+        FAILED_COUNT=$((FAILED_COUNT + 1))
+        return 0
+    fi
+    for requested in "${SLACK_EXPORT_ROOTS[@]}"; do
+        root="$SANDBOX$requested"
+        eligible=0
+        while IFS=$'\t' read -r u h uid; do
+            case "$root" in "$h"/*) eligible=1; break ;; esac
+        done < <(enumerate_users)
+        if [ "$eligible" -ne 1 ]; then
+            log_warn "slackexport: root is outside an eligible user home: $root"
+            FAILED_COUNT=$((FAILED_COUNT + 1)); continue
+        fi
+        guard_mutation_target "$root" || continue
+        if [ -e "$root/.lock" ] || [ -L "$root/.lock" ]; then
+            log_warn "slackexport: export lock is present; root retained: $root"
+            FAILED_COUNT=$((FAILED_COUNT + 1)); continue
+        fi
+        if [ ! -e "$root" ]; then continue; fi
+        if [ ! -d "$root" ] || [ ! -r "$root" ] || [ ! -x "$root" ]; then
+            log_warn "slackexport: expected a readable export directory: $root"
+            FAILED_COUNT=$((FAILED_COUNT + 1)); continue
+        fi
+        slack_targets=()
+        failed=0; before="$FAILED_COUNT"
+        if [ -e "$root/users.json" ] || [ -e "$root/org_users.json" ] || [ -L "$root/users.json" ] || [ -L "$root/org_users.json" ]; then
+            slack_export_plan_standard "$root" || failed=1
+        elif [ -d "$root/archive" ]; then
+            slack_export_plan_dump "$root" || failed=1
+        else
+            # Missing or empty roots are repeatable; unknown nonempty layouts
+            # remain intact rather than being treated as disposable directories.
+            while read_find_path entry; do failed=1; done < <(find_checked "$root" -mindepth 1 -maxdepth 1 -print0)
+        fi
+        if [ "$failed" -eq 1 ] || [ "$FAILED_COUNT" -ne "$before" ]; then
+            log_warn "slackexport: unsupported, malformed or unsafe export retained: $root"
+            FAILED_COUNT=$((FAILED_COUNT + 1)); continue
+        fi
+        # Recheck the cooperative lock immediately before applying the plan.
+        if [ -e "$root/.lock" ] || [ -L "$root/.lock" ]; then
+            log_warn "slackexport: export became locked; root retained: $root"
+            FAILED_COUNT=$((FAILED_COUNT + 1)); continue
+        fi
+        for file in ${slack_targets[@]+"${slack_targets[@]}"}; do selected_remove_path "$file"; done
+    done
+    return 0
+}
+
 module_selected() {
-    [ -n "$SELECTED_MODULES" ] || return 0
+    if [ -z "$SELECTED_MODULES" ]; then
+        case "$1" in clipboard|headless|slackexport) return 1 ;; *) return 0 ;; esac
+    fi
     case ",$SELECTED_MODULES," in
         *",$1,"*) return 0 ;;
         *) return 1 ;;
@@ -2814,6 +3602,9 @@ run_module() {
         apps)        module_apps ;;
         editors)     module_editors ;;
         ai)          module_ai ;;
+        clipboard)   module_clipboard ;;
+        headless)    module_headless ;;
+        slackexport) module_slackexport ;;
         *)
             log_warn "unknown module id in dispatch: $1"
             ;;
@@ -2826,7 +3617,7 @@ run_selected_modules() {
     if [ -n "$SELECTED_MODULES" ]; then
         log_info "running modules: $(printf '%s' "$SELECTED_MODULES" | tr ',' ' ')"
     else
-        log_info "running modules: all"
+        log_info "running modules: standard (clipboard, headless and slackexport require selection)"
     fi
     for id in "${MODULE_IDS[@]}"; do
         if module_selected "$id"; then

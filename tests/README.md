@@ -123,7 +123,7 @@ remove it when finished. Never mark a real home or mounted volume as a sandbox.
 | Phase | Required behavior |
 | --- | --- |
 | A — CLI validation | Invalid or empty module selections return `64` and retain data |
-| B — module listing | `--list` returns `0` and includes all 16 module IDs |
+| B — module listing | `--list` returns `0` and includes all 19 module IDs |
 | C — forced cleanup | Selected fixture data is removed for both users; bookmarks, audit `current`, excluded homes, and external-volume sentinels remain; corrupt SQLite makes verification fail |
 | D — dry-run | File hashes, directories, and symlink targets match the pre-run manifest; an added file makes verification fail |
 | E — sandbox guard | An unmarked root is refused before cleanup |
@@ -149,6 +149,11 @@ remove it when finished. Never mark a real home or mounted volume as a sandbox.
 | Shell stores | Atuin history and encrypted history records, history pack manifests, retained keys/authentication/KV/scripts, fish, Nushell, Xonsh, histdb, directory jump stores, IPython profiles, unsupported schemas, rollback, and active clients |
 | Editor history | VS Code-family shared history, JetBrains LocalHistory, Vim/Neovim state, retained settings and unsaved buffers, process checks, symlink boundaries, and enumeration failures |
 | Volume Trash | Default exclusion, explicit opt-in, hidden entries, UID scope, retained Trash directories, links, owner mismatch, deletion failure, and the native mounted-device filter |
+| Clipboard | Maccy pinned-item and configuration preservation, known schema cleanup, orphan content, transaction logs, unsupported layouts, linked files, real WAL writer refusal, retry, and dry-run stability; native pasteboard commands are never run |
+| Terminal and usage | cmux opt-in, retained settings and tools, process-query failure, multiple users, nested recent-document lists, unknown file preservation, and symlink refusal |
+| Extended AI | Known Gemini/Antigravity/desktop/context-mode stores, real FTS databases, credentials and settings preservation, derived-history opt-in, unsupported schemas, links, orphan sidecars, process guards, and a real WAL writer |
+| Headless profiles | Explicit selection, age limits, recent descendant files, locked and unknown profiles, process-query failures, dry-run stability, and physical-parent replacement refusal |
+| Slack exports | Explicit roots, standard JSON metadata validation, selected Slackdump files, preservation of scripts/configuration, path traversal and link refusal, locks, process checks, malformed exports, and dry-run stability |
 
 Feature suites check dry-run preservation and repeated cleanup where applicable.
 Process detection is tested with controlled command listings. Native volume

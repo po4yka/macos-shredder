@@ -39,8 +39,9 @@ chmod +x shredder.sh
 sudo ./shredder.sh --modules shell,browser,trash --force
 ```
 
-Without `--modules`, the script runs all 16 modules, including `ai` and
-`editors`. Modules run in the order listed below, regardless of the order in
+Without `--modules`, the script runs the 16 standard modules, including `ai`
+and `editors`. The additional `clipboard`, `headless`, and `slackexport`
+modules require explicit selection. Modules run in the order listed below, regardless of the order in
 `--modules`. Without `--force`, a real run asks for confirmation. `--force`
 only skips that prompt; it does not bypass process, path, or database checks.
 
@@ -63,7 +64,7 @@ home directories. There is no single-user selection option.
 | `-h`, `--help` | Show command-line help |
 | `-v`, `--version` | Show the script version |
 | `-l`, `--list` | List the module IDs and descriptions |
-| `-m`, `--modules IDS` | Select comma-separated module IDs; omitted means all modules |
+| `-m`, `--modules IDS` | Select comma-separated module IDs; omitted means the 16 standard modules |
 | `-n`, `--dry-run` | Preview without changing cleanup targets or creating an operation log |
 | `-d`, `--debug` | Show detailed operations and skipped paths |
 | `-f`, `--force` | Skip the cleanup confirmation prompt |
@@ -72,9 +73,15 @@ home directories. There is no single-user selection option.
 | `--include-extension-data` | Allow `browser` to remove shared website/extension storage; this can reset extension settings and sign-ins |
 | `--purge-snapshots` | Delete local Time Machine snapshots before the selected modules run |
 | `--ai-derived` | Include supported memory, plans, and generated artifacts in `ai` cleanup |
+| `--ai-extended` | Include supported Gemini, Antigravity, desktop AI, context-mode, and Serena traces in `ai` cleanup |
+| `--terminal-sessions` | Include known cmux session and journal files in `shell` cleanup |
+| `--clipboard-include-pinned` | Include pinned Maccy items in `clipboard` cleanup |
+| `--clipboard-current` | Also clear the verified active GUI user's current clipboard |
+| `--headless-days N` | Keep Chrome Headless profiles with changes in the last N days; default 7, range 1–99999 |
+| `--slack-export-root PATH` | Select a local Slack export directory; repeatable and required with `--modules slackexport` |
 | `--ai-root KIND=PATH` | Add a custom AI storage location; repeat for multiple roots |
 
-The four scope-expansion flags are off by default. `--ai-root` is additive;
+The scope-expansion flags are off by default. `--ai-root` is additive;
 it does not restrict cleanup to the supplied path. `--purge-snapshots` runs
 independently of module selection. See the sections below before enabling
 these options.
@@ -105,6 +112,9 @@ Dry-run and `--list` do not create logs.
 | `apps` | Selected editor caches, logs, and saved terminal states |
 | `editors` | VS Code-family and JetBrains local history; Vim/Neovim persistent history |
 | `ai` | Local sessions for Claude Code, Codex, OpenCode, Cursor, Windsurf, Continue, Cline/Roo, and Aider |
+| `clipboard` | Known Maccy clipboard history; explicit selection only |
+| `headless` | Old, unlocked Chrome Headless temporary profiles; explicit selection only |
+| `slackexport` | Known data in explicitly selected local Slack exports; explicit selection only |
 
 Mounted volumes are excluded by default. Use `--include-volumes` to include
 their FSEvents, `.DS_Store` data, and per-user Trash in the corresponding
@@ -129,6 +139,127 @@ the script does not change mount permissions. Disconnected volumes, custom
 mount points, and Trash for users without an eligible local home are outside
 this scope. The per-UID layout is also used by the
 [macOS trash utility](https://github.com/morgant/tools-osx/blob/master/src/trash).
+
+## Additional cleanup scopes
+
+These examples only preview operations:
+
+```sh
+./shredder.sh --modules clipboard --dry-run --debug
+./shredder.sh --modules shell --terminal-sessions --dry-run --debug
+./shredder.sh --modules ai --ai-extended --dry-run --debug
+./shredder.sh --modules headless --headless-days 7 --dry-run --debug
+./shredder.sh --modules slackexport --slack-export-root /Users/alice/slack_dump --dry-run --debug
+```
+
+### Maccy clipboard history
+
+`clipboard` clears known history rows in Maccy's `Storage.sqlite`, both in
+the application container and in the older Application Support location.
+It preserves pinned items, preferences, and model metadata. Use
+`--clipboard-include-pinned` to include pinned items. Close Maccy first.
+Unknown schemas, external binary-object stores, linked databases, and busy
+databases are retained and reported. Cleanup also clears related content and
+SwiftData transaction history, then compacts SQLite and checkpoints its WAL.
+
+`--clipboard-current` separately clears the current pasteboard of the verified
+active console user. It requires that user's GUI session. It does not clear
+other users' pasteboards or fall back to a root pasteboard. Failure to find or
+enter that GUI session produces exit `2`. This native action is not executed
+by the sandbox tests.
+
+Schema references: [Maccy storage](https://github.com/p0deje/Maccy/blob/master/Maccy/Storage.swift),
+[history items](https://github.com/p0deje/Maccy/blob/master/Maccy/Models/HistoryItem.swift),
+and [history content](https://github.com/p0deje/Maccy/blob/master/Maccy/Models/HistoryItemContent.swift).
+
+### cmux sessions and per-application recent documents
+
+`shell --terminal-sessions` clears the contents of the known `terminal-history`,
+`session-history`, and `session-com.cmuxterm.app-scrollback` directories under
+cmux Application Support. It also removes `workstream.jsonl`, `events.jsonl`,
+`events.jsonl.1`, and `agent-journal-dead-letter.jsonl` from `~/.cmuxterm`.
+Settings, CLI shims, credentials, and mixed cmux databases remain. Close cmux
+and its background processes first; a failed process query blocks this scope.
+
+`usage` also clears `.sfl2`, `.sfl3`, and `.sfl4` files immediately within
+`com.apple.sharedfilelist/com.apple.LSSharedFileList.ApplicationRecentDocuments`.
+Favorites, unknown formats, and nested directories remain.
+
+### Extended local AI traces
+
+`ai --ai-extended` adds the following known stores. The regular `ai` scope
+still runs. Close Gemini, Antigravity, ChatGPT, Claude Desktop, Serena,
+context-mode servers, and the clients required by the regular `ai` module.
+
+- Gemini: project chats, checkpoints, and logs under `~/.gemini/tmp`.
+  Its shadow Git history is included only with `--ai-derived`.
+- Antigravity, Antigravity CLI, and Antigravity IDE: known conversation
+  databases, indexes, UUID-named protobuf conversations, and session logs
+  under their `~/.gemini` roots.
+- ChatGPT desktop: local `conversations-v*` and `drafts-v*` stores.
+- Claude Desktop: recognized local session entries and history fields in
+  the supported local-agent-mode layout; virtual machines, runtime binaries,
+  scheduled tasks, plugins, and settings remain.
+- context-mode: known session and content database tables, plus session
+  statistics. Serena: its dedicated log directory.
+
+OAuth credentials, skills, project files, and application configuration
+remain. Unknown SQLite schemas and database recovery copies in the checked
+conversation/context-mode database directories are retained and reported.
+These stores were checked against local schema metadata; future versions can
+need new schema support. Cloud conversations and arbitrary exports are not
+deleted. Antigravity derived stores (`brain`, `knowledge`, `implicit`, and
+artifacts), backup roots, arbitrary database copies, and context-mode root
+logs remain outside this scope, even with `--ai-derived`. They can retain
+conversation data. See [Gemini session management](https://geminicli.com/docs/cli/session-management/).
+
+### Chrome Headless temporary profiles
+
+`headless` checks only `Library/Application Support/Google/Chrome-headless`
+inside each eligible home. A candidate must be named `scoped_dir` followed
+by letters or digits and contain the known `Default` and `Local State` paths.
+The profile and its descendants must have no changes within `--headless-days`.
+Profiles with a singleton lock or socket are retained and reported. Close
+browsers and browser automation before cleanup and keep them closed until it
+finishes. Failed process queries block cleanup. Symlink targets and nested
+mount contents are not followed.
+
+### Local Slack exports
+
+`slackexport` requires one or more `--slack-export-root` paths. There is no
+automatic home-directory scan and no default export root. Only normalized
+directories below eligible `/Users/<user>/` homes are accepted. Home roots,
+broad standard folders, linked paths, and unknown formats are refused.
+
+The supported formats are unpacked Slack JSON exports and the Slackdump
+archive workspace layout. Standard exports are selected by their metadata;
+channel names are validated before any removal. Unrelated files and tools
+remain. Slackdump cleanup includes the known archive database and sidecars,
+downloaded uploads and avatars, matching database snapshots, and supported
+top-level user/channel export files. The selected workspace uses
+`archive/slackdump.sqlite`, optional `archive/__uploads` and
+`archive/__avatars`, and `snapshots/slackdump_YYYYMMDD_HHMMSS.sqlite`.
+SQLite `-wal`, `-shm`, and `-journal` sidecars are included. Top-level export
+names are `users-T<workspace ID>.json` and `channels-T<workspace ID>.txt`.
+It preserves scripts, programs, settings,
+locks, and monitoring tools. ZIP/TXT-only exports and arbitrary renamed copies
+are outside this scope.
+
+After a standard JSON export's metadata is removed, remaining empty channel
+directories or unrelated files no longer identify a complete export. A repeat
+run can therefore return `2` without changing those leftovers. Slackdump's
+empty archive/media layout is retained for repeated cleanup.
+
+Stop exporters and scheduled sync jobs before cleanup. The script refuses an
+active exporter, a failed process query, or a `.lock` entry at the selected
+root. A real run also requires `lsof` to confirm that archive databases and
+their sidecars are not open. It
+does not stop jobs, remove locks, revoke credentials, or delete Slack cloud
+data. A later export can recreate local data. As with other modules, failures
+can leave a partially cleaned export; exit `2` reports incomplete cleanup.
+
+Format references: [Slack JSON exports](https://slack.com/help/articles/220556107-How-to-read-Slack-data-exports)
+and [Slackdump](https://github.com/rusq/slackdump).
 
 ## Browser site data and tab recovery
 
@@ -433,7 +564,7 @@ that directory. Root-owned user directories are refused.
 ## Tests
 
 The integration suite uses temporary sandboxes for cleanup. It covers CLI
-behavior, all 16 modules, dry-run stability, process and path checks, AI and
+behavior, all 19 modules, dry-run stability, process and path checks, AI and
 editor settings preservation, shell stores, browser origins and tab recovery,
 and mounted-volume Trash. SQLite tests cover transaction rollback, active
 readers and writers, WAL cleanup, unknown schemas, and retained credentials.
