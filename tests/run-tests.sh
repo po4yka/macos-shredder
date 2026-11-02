@@ -422,7 +422,7 @@ phase_o_firefox_failures() {
   # Use real tools on a PATH without sqlite3. There must be no delete fallback.
   cp "$original" "$db" || return 1
   mkdir -p "$bin"
-  for cmd in tr find stat id; do
+  for cmd in tr find stat id mktemp rm rmdir mkfifo sleep; do
     ln -s "$(command -v "$cmd")" "$bin/$cmd" || return 1
   done
   rc=0
@@ -528,6 +528,8 @@ if [ "$overall" -ne 0 ]; then
   exit 1
 fi
 bash "$SCRIPT_DIR/regressions.sh"
+bash "$SCRIPT_DIR/resilience.sh"
+bash "$SCRIPT_DIR/timeouts.sh"
 bash "$SCRIPT_DIR/ai-sessions.sh"
 bash "$SCRIPT_DIR/ai-editors.sh"
 bash "$SCRIPT_DIR/browser-stores.sh"

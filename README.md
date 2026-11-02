@@ -93,6 +93,8 @@ home directories. There is no single-user selection option.
 | `-n`, `--dry-run` | Preview without changing cleanup targets |
 | `-d`, `--debug` | Show detailed operations and skipped paths |
 | `-f`, `--force` | Skip the cleanup confirmation prompt |
+| `--module-timeout N` | Limit each module and snapshot-purge step to N seconds; default 3600 |
+| `--timeout-grace N` | Allow N seconds after timeout SIGTERM before SIGKILL; default 30 |
 | `--include-volumes` | Include mounted-volume targets in the selected `trash`, `fsevents`, and `dsstore` modules |
 | `--include-extension-data` | Allow `browser` to remove shared website/extension storage; this can reset extension settings and sign-ins |
 | `--logs-older-than N` | Remove eligible closed legacy rotations, diagnostic reports, and BSM trails older than N days; requires `systemlogs` or `audit` and rejects `unified` |
@@ -123,6 +125,8 @@ path. `spelling` requires at least one `--spelling-word`. Their options, and
 Quote paths that contain spaces. The examples use placeholder `/Users/alice/...`
 paths; replace them with actual targets.
 Age arguments accept integers from 1 through 99999, without leading zeroes.
+Timeout arguments use the same integer range and cannot be disabled with `0`.
+For a longer cleanup, use `--module-timeout 7200 --timeout-grace 60`.
 
 The scope-expansion flags are off by default. `--ai-root` is additive;
 it does not restrict cleanup to the supplied path. `--purge-snapshots` runs
@@ -1046,6 +1050,34 @@ and [Aider history options](https://aider.chat/docs/config/options.html#history-
 - Exit `64`: invalid command-line input.
 - Exit `1`: initialization or environment failure.
 - Exit `130`: interrupted by the user.
+- Exit `129` or `143`: cleanup received SIGHUP or SIGTERM.
+
+Expected operation failures are counted, and cleanup continues with the next
+target. Each module and the optional snapshot purge run in a separate strict
+shell. An unexpected command, pipeline, variable, or redirection error stops
+that step. The remaining selected modules still run. The summary retains the
+operation counts from the stopped step and reports exit `2`. A warning names
+the stopped step. If its counters cannot be recovered, the warning states
+that partial progress cannot be counted.
+Private temporary state contains only numeric counters and is removed after
+the step or cancellation. If it cannot be created, the step is skipped and
+counted as a failure.
+
+Each module and the optional snapshot purge have a wall-clock limit of one
+hour by default (`--module-timeout 3600`). This limit covers the entire step,
+including all users and external commands. Progress does not reset the timer.
+At the deadline, the watchdog sends SIGTERM to the step's process group. It
+allows 30 seconds for termination (`--timeout-grace 30`), then sends SIGKILL
+to any remaining processes in that group. The next selected module still
+runs. A timeout is counted as a failure and the run returns `2`; it is not
+treated as user cancellation. SIGKILL can prevent recovery of partial counts.
+Successful steps stop and reap their watchdogs without waiting for the limit.
+No GNU `timeout` installation is required.
+
+Initialization and safety checks still apply. Ctrl+C, SIGHUP, and SIGTERM stop
+the run. Cleanup does not automatically retry destructive operations or undo
+completed work. Argument parsing, environment checks, confirmation, and
+private-state setup are outside the module time limit.
 
 Cleanup is not atomic across files, databases, users, or modules. An exit `2`
 can follow successful deletions. Review the warnings, correct the cause, and

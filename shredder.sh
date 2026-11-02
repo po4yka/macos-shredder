@@ -36,6 +36,7 @@
 #   2    one or more operations failed or were refused (also possible in dry-run)
 #   64   usage error
 #   130  interrupted by user (SIGINT)
+#   129/143  stopped by SIGHUP/SIGTERM
 
 SCRIPT_NAME="macos-shredder"
 VERSION="1.0.0"
@@ -84,9 +85,14 @@ DEVICE_BACKUPS=()
 DIAGNOSTIC_EXPORTS=()
 AI_CLAUDE_TMP_BASE=/private/tmp
 TEST_MODE=0
+MODULE_TIMEOUT=3600
+TIMEOUT_GRACE=30
 
 CLEANED_COUNT=0
 FAILED_COUNT=0
+CLEANUP_PID=""
+CLEANUP_STATE_DIR=""
+WATCHDOG_PID=""
 
 MODULES_ARG=""
 SELECTED_MODULES=""
@@ -244,8 +250,19 @@ die() {
 
 # shellcheck disable=SC2329 # invoked by trap in main()
 on_interrupt() {
-    printf '%b\n' "${COLOR_YELLOW}[!]${COLOR_RESET} interrupted by user; exiting" >&2
-    exit 130
+    on_signal INT 130 "interrupted by user"
+}
+
+# Forward cancellation to the isolated step before the parent exits.
+on_signal() {
+    local signal="$1" status="$2" reason="$3"
+    if [ -n "$CLEANUP_PID" ]; then
+        kill -s "$signal" -- "-$CLEANUP_PID" 2>/dev/null || true
+    fi
+    stop_cleanup_watchdog cancelled
+    cleanup_step_state
+    printf '%b\n' "${COLOR_YELLOW}[!]${COLOR_RESET} $reason; exiting" >&2 || true
+    exit "$status"
 }
 
 ###############################################################################
@@ -749,6 +766,9 @@ Options:
   -m, --modules IDS     Comma-separated module ids (default: standard modules).
                         See '--list' for valid ids; unknown ids are rejected.
   -f, --force           Do not ask for confirmation (auto-answer yes)
+      --module-timeout N
+                        Limit each module/snapshot step to N seconds (default 3600)
+      --timeout-grace N Allow N seconds after SIGTERM before SIGKILL (default 30)
       --include-volumes Include mounted-volume Trash, FSEvents and .DS_Store
                         targets when their modules are selected
       --include-extension-data
@@ -900,6 +920,16 @@ parse_args() {
                 FORCE=1
                 shift
                 ;;
+            --module-timeout)
+                [ $# -ge 2 ] || usage_error "--module-timeout requires seconds"
+                MODULE_TIMEOUT="$2"; shift 2
+                ;;
+            --module-timeout=*) MODULE_TIMEOUT="${1#*=}"; shift ;;
+            --timeout-grace)
+                [ $# -ge 2 ] || usage_error "--timeout-grace requires seconds"
+                TIMEOUT_GRACE="$2"; shift 2
+                ;;
+            --timeout-grace=*) TIMEOUT_GRACE="${1#*=}"; shift ;;
             -m|--modules)
                 if [ $# -lt 2 ]; then
                     usage_error "option '$1' requires an argument"
@@ -1012,6 +1042,8 @@ parse_args() {
                 ;;
         esac
     done
+    case "$MODULE_TIMEOUT" in ''|*[!0-9]*|0*|??????*) usage_error "--module-timeout must be between 1 and 99999 seconds" ;; esac
+    case "$TIMEOUT_GRACE" in ''|*[!0-9]*|0*|??????*) usage_error "--timeout-grace must be between 1 and 99999 seconds" ;; esac
     if [ -n "$MODULES_ARG" ]; then
         parse_modules "$MODULES_ARG"
     fi
@@ -4641,6 +4673,132 @@ module_selected() {
     esac
 }
 
+cleanup_step_state() {
+    [ -n "$CLEANUP_STATE_DIR" ] || return 0
+    if ! rm -f -- "$CLEANUP_STATE_DIR/counts" "$CLEANUP_STATE_DIR/timed-out" "$CLEANUP_STATE_DIR/watchdog" \
+        || ! rmdir -- "$CLEANUP_STATE_DIR"; then
+        log_warn "cannot remove temporary cleanup state: $CLEANUP_STATE_DIR"
+        FAILED_COUNT=$((FAILED_COUNT + 1))
+    fi
+    CLEANUP_STATE_DIR=""
+}
+
+# A FIFO stops the deadline read without a long-lived sleep or a signal race.
+stop_cleanup_watchdog() {
+    [ -n "$WATCHDOG_PID" ] || return 0
+    if [ "${1:-}" = cancelled ]; then
+        kill -s KILL "$WATCHDOG_PID" 2>/dev/null || true
+        kill -s KILL -- "-$WATCHDOG_PID" 2>/dev/null || true
+    else
+        printf 'stop\n' >&6
+    fi
+    wait "$WATCHDOG_PID" 2>/dev/null || true
+    WATCHDOG_PID=""
+    exec 6>&-
+}
+
+cleanup_watchdog() {
+    local target="$1" state_dir="$2" _stop
+    set +m
+    trap 'exit 0' INT TERM HUP
+    if IFS= read -r -t "$MODULE_TIMEOUT" -u 6 _stop; then return 0; fi
+    kill -0 -- "-$target" 2>/dev/null || return 0
+    if ! : > "$state_dir/timed-out"; then
+        log_warn "cannot record cleanup timeout; forcing the current step to stop"
+        kill -s KILL -- "-$target" 2>/dev/null || true
+        return 1
+    fi
+    kill -s TERM -- "-$target" 2>/dev/null || true
+    { sleep "$TIMEOUT_GRACE"; } 2>/dev/null || true
+    kill -s KILL -- "-$target" 2>/dev/null || true
+}
+
+# Run each independent cleanup step in a strict child shell. Do not put this
+# function in an if/! or &&/|| condition: Bash would disable errexit in the child.
+# A private temporary directory holds only counters, never paths or activity.
+# The EXIT trap preserves completed operations even after an unexpected error.
+run_cleanup_step() {
+    local label="$1" state="" status=1 completed=0 had_monitor=0 timed_out=0
+    local counter_pattern='^([0-9]+) ([0-9]+) ([01])$' state_template
+    shift
+    if [ "$TEST_MODE" -eq 1 ]; then
+        state_template="$SANDBOX/.shredder-step.XXXXXX"
+    else
+        state_template="/private/tmp/macos-shredder.XXXXXX"
+    fi
+    if ! CLEANUP_STATE_DIR="$(mktemp -d "$state_template" 2>/dev/null)"; then
+        FAILED_COUNT=$((FAILED_COUNT + 1))
+        log_warn "$label: cannot create private cleanup state; step skipped"
+        return 0
+    fi
+    if ! mkfifo "$CLEANUP_STATE_DIR/watchdog" \
+        || ! { exec 6<> "$CLEANUP_STATE_DIR/watchdog"; } 2>/dev/null; then
+        FAILED_COUNT=$((FAILED_COUNT + 1))
+        log_warn "$label: cannot create cleanup watchdog; step skipped"
+        cleanup_step_state
+        return 0
+    fi
+    # Give the step its own process group. Without monitor mode, Bash 3.2
+    # makes asynchronous jobs ignore SIGINT before their traps can be set.
+    case "$-" in *m*) had_monitor=1 ;; esac
+    set -m
+    (
+        set +m
+        set -eu
+        set -o pipefail
+        umask 077
+        exec 5> "$CLEANUP_STATE_DIR/counts"
+        exec 6>&-
+        CLEANUP_PID=""
+        WATCHDOG_PID=""
+        # Only the parent removes the shared state directory.
+        # shellcheck disable=SC2030
+        CLEANUP_STATE_DIR=""
+        trap 'printf "%s %s %s\n" "$CLEANED_COUNT" "$FAILED_COUNT" "$completed" >&5' EXIT
+        trap on_interrupt INT
+        trap 'exit 143' TERM
+        trap 'exit 129' HUP
+        "$@"
+        completed=1
+    ) &
+    CLEANUP_PID=$!
+    # shellcheck disable=SC2031 # child state reset does not affect this parent
+    cleanup_watchdog "$CLEANUP_PID" "$CLEANUP_STATE_DIR" &
+    WATCHDOG_PID=$!
+    if [ "$had_monitor" -eq 0 ]; then set +m; fi
+    # Guard wait, not the child command: Bash must keep errexit active there.
+    if wait "$CLEANUP_PID"; then status=0; else status=$?; fi
+    stop_cleanup_watchdog
+    # shellcheck disable=SC2031 # child state reset does not affect this parent
+    [ ! -f "$CLEANUP_STATE_DIR/timed-out" ] || timed_out=1
+    CLEANUP_PID=""
+    # The child reset does not change the parent's directory reference.
+    # shellcheck disable=SC2031
+    { IFS= read -r state < "$CLEANUP_STATE_DIR/counts"; } 2>/dev/null || true
+
+    if [[ "$state" =~ $counter_pattern ]]; then
+        CLEANED_COUNT="${BASH_REMATCH[1]}"
+        FAILED_COUNT="${BASH_REMATCH[2]}"
+        completed="${BASH_REMATCH[3]}"
+    else
+        log_warn "$label: cleanup counters unavailable; partial progress cannot be counted"
+        completed=0
+    fi
+    cleanup_step_state
+    if [ "$timed_out" -eq 1 ]; then
+        FAILED_COUNT=$((FAILED_COUNT + 1))
+        log_warn "$label: timed out after ${MODULE_TIMEOUT}s; continuing with remaining cleanup"
+        return 0
+    fi
+    # Cancellation must stop the complete run, not just the current module.
+    case "$status" in 129|130|143) exit "$status" ;; esac
+    if [ "$status" -ne 0 ] || [ "$completed" -ne 1 ]; then
+        FAILED_COUNT=$((FAILED_COUNT + 1))
+        log_warn "$label: stopped unexpectedly (exit $status); continuing with remaining cleanup"
+    fi
+    return 0
+}
+
 run_module() {
     case "$1" in
         shell)       module_shell ;;
@@ -4683,6 +4841,7 @@ run_module() {
         alfred)      module_alfred ;;
         *)
             log_warn "unknown module id in dispatch: $1"
+            return 1
             ;;
     esac
     return 0
@@ -4698,7 +4857,7 @@ run_selected_modules() {
     for id in "${MODULE_IDS[@]}"; do
         if module_selected "$id"; then
             log_debug "=== module: $id ==="
-            run_module "$id"
+            run_cleanup_step "$id" run_module "$id"
         fi
     done
     return 0
@@ -4736,6 +4895,8 @@ print_summary() {
 main() {
     setup_colors
     trap on_interrupt INT
+    trap 'on_signal TERM 143 "terminated by SIGTERM"' TERM
+    trap 'on_signal HUP 129 "terminated by SIGHUP"' HUP
     parse_args "$@"
 
     if [ "$LIST_ONLY" -eq 1 ]; then
@@ -4765,7 +4926,7 @@ main() {
 
     if [ "$PURGE_SNAPSHOTS" -eq 1 ]; then
         log_info "purging local APFS snapshots (--purge-snapshots)"
-        purge_snapshots
+        run_cleanup_step snapshots purge_snapshots
     fi
 
     run_selected_modules

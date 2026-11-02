@@ -13,7 +13,7 @@ See the [module reference](../README.md#modules) for cleanup scope and the
 
 - Bash 3.2 or later.
 - Standard BSD or GNU command-line tools, including `find`, `stat`, `sort`,
-  `sed`, `awk`, `grep`, `cp`, `mv`, `rm`, `mkdir`, `mktemp`, and `mkfifo`.
+  `sed`, `awk`, `grep`, `cp`, `mv`, `rm`, `rmdir`, `mkdir`, `mktemp`, and `mkfifo`.
 - `sqlite3` with JSON support. Tests use real databases, transactions, and WAL
   readers and writers.
 - `shasum` or `sha256sum`, plus `gzip`, `cmp`, and `diff`.
@@ -53,11 +53,13 @@ checkpoint truncation can complete.
 
 ## Test files
 
-`run-tests.sh` runs phases A–O first, then these 25 feature suites in order:
+`run-tests.sh` runs phases A–O first, then these 27 feature suites in order:
 
 | File | Role |
 | --- | --- |
 | [regressions.sh](regressions.sh) | General cleanup, status, absence of operation logs, and fixture checks |
+| [resilience.sh](resilience.sh) | Module and snapshot fault isolation, partial counters, dry-run, and cancellation |
+| [timeouts.sh](timeouts.sh) | Real deadlines, TERM/KILL escalation, descendants, SQLite rollback, CLI limits, and watchdog cleanup |
 | [ai-sessions.sh](ai-sessions.sh) | Agent sessions, databases, mixed JSON, derived data, and credentials |
 | [ai-editors.sh](ai-editors.sh) | Cursor, Windsurf, Continue, Cline/Roo, and Aider sessions |
 | [browser-stores.sh](browser-stores.sh) | Website storage, tab recovery, extension opt-in, and WAL handling |
