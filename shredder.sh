@@ -4304,7 +4304,12 @@ module_documentversions() {
             log_warn "documentversions: no eligible user home: $item"
             FAILED_COUNT=$((FAILED_COUNT + 1)); continue
         fi
-        guard_mutation_target "$target" || continue
+        # Keep the shared guard's dry-run accounting local. This explicit
+        # module reports and counts every refused selection exactly once.
+        if ! (guard_mutation_target "$target") 2>/dev/null; then
+            log_warn "documentversions: unsafe selected path refused: $item"
+            FAILED_COUNT=$((FAILED_COUNT + 1)); continue
+        fi
         if [ ! -f "$target" ] || [ -L "$target" ] || ! slack_export_file_idle "$target"; then
             log_warn "documentversions: selected file missing, unsafe or open: $item"
             FAILED_COUNT=$((FAILED_COUNT + 1)); continue

@@ -78,3 +78,20 @@ document_versions_native() { return 1; }
 module_documentversions
 [ "$FAILED_COUNT" -eq 6 ] && [ "$CLEANED_COUNT" -eq 2 ]
 printf 'PASS: missing, linked, invalid and failed targets refused\n'
+
+# End-to-end refusal must be visible without --debug, in dry and real runs.
+ln -s "$USERS_DIR/Fixture User/documents" "$USERS_DIR/Fixture User/linked-documents"
+for mode in dry real; do
+    for selected in '/Users/Fixture User/documents/current.txt.link' '/Users/Fixture User/linked-documents/current.txt'; do
+        args=(--modules documentversions --version-file "$selected" --force)
+        if [ "$mode" = dry ]; then args+=(--dry-run); fi
+        status=0
+        /bin/bash "$SCRIPT_DIR/../shredder.sh" "${args[@]}" > "$WORK/refusal-output" 2>&1 || status=$?
+        [ "$status" -eq 2 ]
+        [ "$(grep -c 'documentversions: unsafe selected path refused:' "$WORK/refusal-output")" -eq 1 ]
+        grep -Eq 'Failed operations: 1$' "$WORK/refusal-output"
+        cmp "$FILE" "$WORK/expected.txt"
+        [ -L "$FILE.link" ] && [ -L "$USERS_DIR/Fixture User/linked-documents" ]
+    done
+done
+printf 'PASS: dry and real linked-file/linked-parent refusal warns once and exits 2 without mutation\n'
