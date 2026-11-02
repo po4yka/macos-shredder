@@ -268,8 +268,14 @@ phase_h_user_owner_commands() {
   # shellcheck disable=SC2016 # $1 expands when the generated stub runs
   printf '#!/bin/sh\ncase "$2" in %%l|%%h) printf "1\\n"; exit ;; esac\ncase "$1" in\n  -f) printf "?\\n" ;;\n  -c) printf "4242\\n" ;;\nesac\n' >"$bin/stat"
   printf '#!/bin/sh\nprintf "999\\n"\n' >"$bin/id"
-  # shellcheck disable=SC2016 # variables expand when the generated stub runs
-  printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "$SHREDDER_TARGET_COMMAND_LOG"\nshift 3\nSHREDDER_VIA_SUDO=1 exec "$@"\n' >"$bin/sudo"
+  # Log each call on one line. Inline sh -c scripts contain newlines.
+  cat >"$bin/sudo" <<'STUB'
+#!/bin/sh
+printf '%s' "$*" | tr '\n' ' ' >> "$SHREDDER_TARGET_COMMAND_LOG"
+printf '\n' >> "$SHREDDER_TARGET_COMMAND_LOG"
+shift 3
+SHREDDER_VIA_SUDO=1 exec "$@"
+STUB
   # shellcheck disable=SC2016 # variables expand when the generated stub runs
   printf '#!/bin/sh\nprintf "%%s:%%s\\n" "${SHREDDER_VIA_SUDO:-direct}" "$PWD/$*" >> "$SHREDDER_SQLITE_CALL_LOG"\nexec "$SHREDDER_REAL_SQLITE" "$@"\n' >"$bin/sqlite3"
   chmod +x "$bin/stat" "$bin/id" "$bin/sudo" "$bin/sqlite3"
@@ -280,7 +286,7 @@ phase_h_user_owner_commands() {
   info "exit code: $rc (expected 0)"
   [ "$rc" -eq 0 ] \
     && grep -q -- '-u #4242 --' "$calls" \
-    && grep -q -- '-u #4242 -- .*private/var/folders/' "$calls" \
+    && grep -q -- '^-u #4242 -- .*/sandbox-h/private/var/folders/' "$calls" \
     && ! grep -q '^direct:.*Users/' "$sqlite_calls" \
     && [ ! -s "$sb/Users/alice/.zsh_history" ]
 }
