@@ -692,3 +692,20 @@ test_selected_artifact_tree_checks() (
 )
 test_selected_artifact_tree_checks
 printf 'PASS: artifact checks reject nested hard links and special files\n'
+
+test_sqlite_stat_tables() (
+    setup_case sqlite-stat
+    local db="$USERS_DIR/alice/.codex/goals_1.sqlite"
+    mkdir -p "${db%/*}"
+    sqlite3 "$db" "CREATE TABLE _sqlx_migrations(v); CREATE TABLE thread_goals(id INTEGER PRIMARY KEY, goal TEXT);
+        CREATE INDEX goal_text ON thread_goals(goal);
+        INSERT INTO thread_goals(goal) VALUES ('SHREDTEST-goal-1'), ('SHREDTEST-goal-2');
+        ANALYZE;"
+    sqlite3 "$db" "SELECT name FROM sqlite_master WHERE name='sqlite_stat1';" | grep -q sqlite_stat1
+    ai_purge_database "$db" goals clean
+    [ "$CLEANED_COUNT" -eq 1 ]
+    [ "$(sqlite3 "$db" 'SELECT COUNT(*) FROM thread_goals;')" -eq 0 ]
+    [ "$(sqlite3 "$db" 'SELECT COUNT(*) FROM sqlite_stat1;')" -eq 0 ]
+)
+test_sqlite_stat_tables
+printf 'PASS: SQLite statistics tables do not block cleanup\n'

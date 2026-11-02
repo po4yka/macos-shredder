@@ -1497,6 +1497,7 @@ shell_purge_database() {
     sqlite_bin="$(command -v sqlite3 2>/dev/null || true)"
     [ -n "$sqlite_bin" ] || { log_warn "shell: sqlite3 required; database retained: $db"; return 1; }
     tables="$(ai_sqlite_command "$db" "$sqlite_bin" "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;" 2>/dev/null)" || return 1
+    deletes="$deletes $(sqlite_stat_tables "$tables")"
     for table in $anchor; do
         case $'\n'"$tables"$'\n' in *$'\n'"$table"$'\n'*) count=$((count + 1)) ;; esac
     done
@@ -2971,6 +2972,14 @@ ai_agents_stopped() {
 
 # SQLite runs as the home owner, from a checked physical parent. Reject links
 # and hard links for the database AND sidecars before SQLite can open them.
+# sqlite_stat_tables TABLES - print the SQLite statistics tables in TABLES.
+# ANALYZE and PRAGMA optimize create them in any database. sqlite_stat4 keeps
+# sampled index values from cleared rows, so clear them with the session data
+# instead of refusing the whole database as an unknown schema.
+sqlite_stat_tables() {
+    printf '%s\n' "$1" | grep -E '^sqlite_stat[1-4]$' | tr '\n' ' ' || true
+}
+
 ai_sqlite_command() {
     local db="$1" sqlite_bin="$2" sql
     shift 2
@@ -3056,6 +3065,7 @@ ai_purge_database() {
         log_warn "ai: cannot read database safely: $db"
         return 1
     fi
+    deletes="$deletes $(sqlite_stat_tables "$tables")"
     for table in $anchor; do
         case $'\n'"$tables"$'\n' in *$'\n'"$table"$'\n'*) count=$((count + 1)) ;; esac
     done
@@ -3546,6 +3556,7 @@ ai_extended_database() {
     [ -n "$sqlite_bin" ] || { log_warn "ai: sqlite3 required; database retained: $db"; return 1; }
     tables="$(ai_sqlite_command "$db" "$sqlite_bin" "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;" 2>/dev/null)" || return 1
     case $'\n'"$tables"$'\n' in *$'\n'"$anchor"$'\n'*) ;; *) return 1 ;; esac
+    deletes="$deletes $(sqlite_stat_tables "$tables")"
     while IFS= read -r table; do
         case " $deletes $keeps " in *" $table "*) ;; *) return 1 ;; esac
     done <<< "$tables"
@@ -4778,6 +4789,7 @@ activity_purge_database() {
     [ -n "$sqlite_bin" ] || return 1
     tables="$(ai_sqlite_command "$db" "$sqlite_bin" "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;" 2>/dev/null)" || return 1
     [ -n "$tables" ] || return 1
+    deletes="$deletes $(sqlite_stat_tables "$tables")"
     while IFS= read -r table; do
         case " $deletes $keeps " in *" $table "*) ;; *) return 1 ;; esac
     done <<< "$tables"
