@@ -164,6 +164,7 @@ recording, and shell history can independently retain records of a run.
 | `callhistory` | Explicit; manual | Phone and FaceTime call history; instructions only, real runs report incomplete |
 | `messagehistory` | Explicit; manual | Messages and recently deleted attachments; instructions only, real runs report incomplete |
 | `photometadata` | Explicit; manual | Photo location metadata; instructions only, real runs report incomplete |
+| `alfred` | Explicit; manual | Alfred clipboard instructions; real runs report incomplete |
 
 Mounted volumes are excluded by default. Use `--include-volumes` to include
 their FSEvents, `.DS_Store` data, and per-user Trash in the corresponding
@@ -276,6 +277,19 @@ See also [terminal output](#terminal-saved-output-and-log-files),
 [file-origin metadata](#selected-file-origin-metadata),
 [notification/activity stores](#notification-and-activity-history), and
 [Siri instructions](#siri-and-dictation).
+
+### Alfred clipboard history
+
+`alfred` prints the supported manual action: open Alfred, type `clear`, and
+select **Clear Alfred's entire clipboard history**. This action rebuilds
+`clipboard.db` and preserves saved Snippets, as documented in
+[Alfred's clipboard troubleshooting guide](https://www.alfredapp.com/help/troubleshooting/clipboard-history/).
+The script does not assume an undocumented database schema or delete application
+directories. Preferences, workflows, credentials and the current system clipboard
+remain unchanged. Run `./shredder.sh --modules alfred --dry-run` to read the
+instructions. A real run reports exit `2` and zero cleaned items because a user
+must complete the action in Alfred. A dry-run reports exit `0`. This module is
+separate from Maccy cleanup and `--clipboard-current`.
 
 ### Maccy clipboard history
 

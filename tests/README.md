@@ -72,6 +72,7 @@ checkpoint truncation can complete.
 | [system-traces.sh](system-traces.sh) | Log retention and FSEvents command contracts |
 | [file-metadata.sh](file-metadata.sh) | Selected origin attributes, retained content, and link refusal |
 | [activity-stores.sh](activity-stores.sh) | Notification/activity SQLite stores and manual Siri reporting |
+| [alfred.sh](alfred.sh) | Alfred manual instructions, incomplete status, and complete fixture preservation |
 
 Supporting scripts:
 

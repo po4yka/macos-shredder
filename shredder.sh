@@ -134,6 +134,7 @@ MODULE_IDS=(
     callhistory
     messagehistory
     photometadata
+    alfred
 )
 MODULE_DESCS=(
     "Shell and REPL histories, session data"
@@ -169,6 +170,7 @@ MODULE_DESCS=(
     "Phone and FaceTime call history (manual action required)"
     "Messages and recently deleted attachments (manual action required)"
     "Photo location metadata (manual action required)"
+    "Alfred clipboard deletion instructions (manual action required)"
 )
 
 # Color codes; filled by setup_colors(), left empty when colors are disabled.
@@ -780,7 +782,7 @@ Scope:
   Close the clients listed in README.md before cleanup. --force skips only
   confirmation; it does not bypass process, path or database checks.
   A dry-run does not validate mixed SQLite schemas or prove secure erasure.
-  notifications/activity require offline stores; siri prints manual steps.
+  notifications/activity require offline stores; siri/alfred print manual steps.
   Unsupported activity stores remain intact and real runs report exit 2.
   Modules labelled manual action required only print guidance and report
   incomplete cleanup on real runs; use --dry-run to read their instructions.
@@ -4362,9 +4364,17 @@ module_photometadata() {
     return 0
 }
 
+module_alfred() {
+    log_warn 'alfred: manual action required. Open Alfred, type clear, then select "Clear Alfred'"'"'s entire clipboard history".'
+    log_warn 'alfred: the supported action rebuilds clipboard.db and preserves saved Snippets. No database schema or automatic deletion API is assumed.'
+    log_warn 'alfred: no clipboard history was counted as cleaned; preferences, workflows, credentials and the current system clipboard remain unchanged.'
+    [ "$DRY_RUN" -eq 1 ] || FAILED_COUNT=$((FAILED_COUNT + 1))
+    return 0
+}
+
 module_selected() {
     if [ -z "$SELECTED_MODULES" ]; then
-        case "$1" in fsevents|clipboard|headless|slackexport|terminal|finderhistory|filemetadata|documentversions|spelling|notifications|activity|siri|mailhistory|locationhistory|callhistory|messagehistory|photometadata) return 1 ;; *) return 0 ;; esac
+        case "$1" in fsevents|clipboard|headless|slackexport|terminal|finderhistory|filemetadata|documentversions|spelling|notifications|activity|siri|mailhistory|locationhistory|callhistory|messagehistory|photometadata|alfred) return 1 ;; *) return 0 ;; esac
     fi
     case ",$SELECTED_MODULES," in
         *",$1,"*) return 0 ;;
@@ -4407,6 +4417,7 @@ run_module() {
         callhistory) module_callhistory ;;
         messagehistory) module_messagehistory ;;
         photometadata) module_photometadata ;;
+        alfred)      module_alfred ;;
         *)
             log_warn "unknown module id in dispatch: $1"
             ;;
