@@ -90,3 +90,7 @@ spaces in home paths, symlink escape protection, and sandbox isolation.
 `SHREDDER_ROOT` is an internal test interface. The target must be an absolute,
 non-symlink directory that contains `.macos-shredder-test-root`; unmarked
 directories are rejected.
+
+## License
+
+This project uses the [MIT License](LICENSE).
