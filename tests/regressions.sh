@@ -457,3 +457,18 @@ test_ai_link_scope() (
 )
 test_ai_link_scope
 printf 'PASS: a refused AI store link skips only that store\n'
+
+test_refusal_counted_once() (
+    setup_case refusal-once
+    local h="$USERS_DIR/alice"
+    mkdir -p "$h/.codex" "$WORK/refusal-outside"
+    printf 'keep\n' > "$WORK/refusal-outside/state.sqlite"
+    ln -s "$WORK/refusal-outside/state.sqlite" "$h/.codex/state_5.sqlite"
+    local rc=0
+    /bin/bash "$SHREDDER" --force --modules ai > "$WORK/refusal-once.log" 2>&1 || rc=$?
+    [ "$rc" -eq 2 ]
+    grep -q 'Failed operations: 1$' "$WORK/refusal-once.log"
+    [ -s "$WORK/refusal-outside/state.sqlite" ]
+)
+test_refusal_counted_once
+printf 'PASS: a refused database link is counted once\n'

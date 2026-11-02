@@ -491,6 +491,14 @@ selected_remove_path() {
     return 0
 }
 
+# count_failure_since BEFORE - count one failure for a refused operation,
+# unless a helper (such as guard_mutation_target) already counted it after
+# FAILED_COUNT was BEFORE. Dry-runs report refusals without counting them.
+count_failure_since() {
+    [ "$DRY_RUN" -eq 0 ] || return 0
+    [ "$FAILED_COUNT" -ne "$1" ] || FAILED_COUNT=$((FAILED_COUNT + 1))
+}
+
 # remove_sqlite_db DB_FILE - remove a database and its rollback/WAL sidecars.
 remove_sqlite_db() {
     local db="$1"
@@ -1425,7 +1433,7 @@ clipboard_clear_current() {
 }
 
 module_clipboard() {
-    local u h uid root
+    local u h uid root before
     if ! clipboard_maccy_stopped; then
         log_warn "clipboard: close Maccy before cleanup; process-query failures also block cleanup"
         if [ "$DRY_RUN" -eq 0 ]; then
@@ -1436,9 +1444,10 @@ module_clipboard() {
     while IFS=$'\t' read -r u h uid; do
         for root in "$h/Library/Containers/org.p0deje.Maccy/Data/Library/Application Support/Maccy" \
                     "$h/Library/Application Support/Maccy"; do
+            before="$FAILED_COUNT"
             if ! clipboard_purge_maccy "$root/Storage.sqlite"; then
                 log_warn "clipboard: Maccy cleanup refused or incomplete: $root/Storage.sqlite"
-                FAILED_COUNT=$((FAILED_COUNT + 1))
+                count_failure_since "$before"
             fi
         done
     done < <(enumerate_users)
@@ -1540,20 +1549,21 @@ ROLLBACK;"
 }
 
 shell_clean_database() {
+    local before="$FAILED_COUNT"
     if ! shell_purge_database "$@"; then
         log_warn "shell: unsafe, unsupported or unavailable history database retained: $1"
-        [ "$DRY_RUN" -eq 1 ] || FAILED_COUNT=$((FAILED_COUNT + 1))
+        count_failure_since "$before"
     fi
 }
 
 shell_clean_atuin() {
-    local root="$1" failed=0
+    local root="$1" failed=0 before="$FAILED_COUNT"
     # Check both files before deleting either representation of the history.
     shell_purge_database "$root/history.db" atuin check || failed=1
     shell_purge_database "$root/records.db" atuin-records check || failed=1
     if [ "$failed" -eq 1 ]; then
         log_warn "shell: Atuin history retained because a database could not be checked: $root"
-        [ "$DRY_RUN" -eq 1 ] || FAILED_COUNT=$((FAILED_COUNT + 1))
+        count_failure_since "$before"
         return 0
     fi
     shell_clean_database "$root/records.db" atuin-records
@@ -1591,7 +1601,7 @@ shell_clean_terminal_sessions() {
         for entry in terminal-history session-history session-com.cmuxterm.app-scrollback; do
             if [ -e "$root/$entry" ] && [ ! -d "$root/$entry" ]; then
                 log_warn "shell: expected a terminal history directory, retaining: $root/$entry"
-                FAILED_COUNT=$((FAILED_COUNT + 1))
+                [ "$DRY_RUN" -eq 1 ] || FAILED_COUNT=$((FAILED_COUNT + 1))
                 continue
             fi
             clear_dir_contents "$root/$entry"
@@ -3085,7 +3095,7 @@ ai_database_flavor() {
 }
 
 ai_databases_in() {
-    local root="$1" kind="$2" mode="$3" db flavor before="$FAILED_COUNT"
+    local root="$1" kind="$2" mode="$3" db flavor before="$FAILED_COUNT" step_before
     guard_mutation_target "$root" || return 1
     [ -d "$root" ] || return 0
     while read_find_path db; do
@@ -3108,8 +3118,9 @@ ai_databases_in() {
             continue
         fi
         [ "$flavor" != memory ] || [ "$AI_DERIVED" -eq 1 ] || continue
+        step_before="$FAILED_COUNT"
         if ! ai_purge_database "$db" "$flavor" "$mode"; then
-            FAILED_COUNT=$((FAILED_COUNT + 1))
+            count_failure_since "$step_before"
         fi
     done < <(find_checked "$root" -mindepth 1 -maxdepth 1 \( -name '*.sqlite' -o -name '*.db' \
         -o -name '*.sqlite-wal' -o -name '*.sqlite-shm' -o -name '*.sqlite-journal' \
@@ -3202,7 +3213,7 @@ ai_clean_aider_tree() {
 }
 
 ai_editor_databases_in() {
-    local dir="$1" flavor="$2" mode="$3" db before="$FAILED_COUNT"
+    local dir="$1" flavor="$2" mode="$3" db before="$FAILED_COUNT" step_before
     guard_mutation_target "$dir" || return 1
     while read_find_path db; do
         case "${db##*/}" in
@@ -3213,7 +3224,8 @@ ai_editor_databases_in() {
                 fi
                 ;;
             state.vscdb|state.vscdb.backup)
-                if ! ai_purge_database "$db" "$flavor" "$mode"; then FAILED_COUNT=$((FAILED_COUNT + 1)); fi ;;
+                step_before="$FAILED_COUNT"
+                if ! ai_purge_database "$db" "$flavor" "$mode"; then count_failure_since "$step_before"; fi ;;
             *)
                 log_warn "ai: unsupported editor database copy retained: $db"
                 FAILED_COUNT=$((FAILED_COUNT + 1)) ;;
@@ -3256,7 +3268,7 @@ ai_clean_editor() {
 }
 
 ai_clean_root() {
-    local kind="$1" root="$2" project entry phase
+    local kind="$1" root="$2" project entry phase step_before
     guard_mutation_target "$root" || return 0
     [ -e "$root" ] || return 0
     if [ "$kind" != opencode-db ] && [ "$kind" != aider-history ] && [ ! -d "$root" ]; then
@@ -3285,7 +3297,8 @@ ai_clean_root() {
             done
             ;;
         opencode-db)
-            if ! ai_purge_database "$root" opencode; then FAILED_COUNT=$((FAILED_COUNT + 1)); fi
+            step_before="$FAILED_COUNT"
+            if ! ai_purge_database "$root" opencode; then count_failure_since "$step_before"; fi
             return 0 ;;
     esac
     case "$kind" in
@@ -3491,14 +3504,15 @@ INSERT INTO extended_check SELECT COUNT(*)=0 FROM sqlite_master WHERE type IN ('
 }
 
 ai_extended_db_directory() {
-    local root="$1" flavor="$2" mode="$3" entry before="$FAILED_COUNT"
+    local root="$1" flavor="$2" mode="$3" entry before="$FAILED_COUNT" step_before
     guard_mutation_target "$root" || return 1
     while read_find_path entry; do
         case "${entry##*/}" in
             *.db)
+                step_before="$FAILED_COUNT"
                 if ! ai_extended_database "$entry" "$flavor" "$mode"; then
                     log_warn "ai: unsupported or busy extended session database retained: $entry"
-                    FAILED_COUNT=$((FAILED_COUNT + 1))
+                    count_failure_since "$step_before"
                 fi ;;
             *.db-wal|*.db-shm|*.db-journal)
                 if [ ! -f "${entry%-*}" ]; then
@@ -3520,7 +3534,7 @@ ai_extended_antigravity() {
     for phase in check clean; do
         if ! ai_extended_database "$root/conversation_summaries.db" antigravity-summary "$phase"; then
             log_warn "ai: unsupported or busy conversation index retained: $root/conversation_summaries.db"
-            FAILED_COUNT=$((FAILED_COUNT + 1))
+            count_failure_since "$before"
             return 0
         fi
         ai_extended_db_directory "$root/conversations" antigravity-session "$phase" || return 0
@@ -3898,7 +3912,7 @@ module_slackexport() {
         fi
         if [ "$failed" -eq 1 ] || [ "$FAILED_COUNT" -ne "$before" ]; then
             log_warn "slackexport: unsupported, malformed or unsafe export retained: $root"
-            FAILED_COUNT=$((FAILED_COUNT + 1)); continue
+            [ "$FAILED_COUNT" -ne "$before" ] || FAILED_COUNT=$((FAILED_COUNT + 1)); continue
         fi
         # Recheck the cooperative lock immediately before applying the plan.
         if [ -e "$root/.lock" ] || [ -L "$root/.lock" ]; then
