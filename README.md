@@ -3,8 +3,10 @@
 `macos-shredder` is a macOS-only cleanup script for shell and editor histories,
 local AI sessions, browser site data and tab recovery, logs, activity databases,
 caches, and Trash. Explicit options also cover clipboard history, local Slack
-exports, terminal output, Finder history, and selected file-origin metadata.
-Siri deletion is a manual workflow; the script only prints instructions.
+exports, terminal output, Finder history, selected file-origin metadata,
+document versions, learned words, diagnostic exports, device backups, Xcode
+test results, and Apple Intelligence reports. Modules marked manual only print
+instructions; they do not perform the app actions.
 
 > Warning: this program deletes data. Run a dry-run first. Use it only on a
 > Mac that you own or administer.
@@ -53,7 +55,7 @@ chmod +x shredder.sh
 sudo ./shredder.sh --modules shell,browser,trash --force
 ```
 
-There are 26 module IDs: 16 standard modules and 10 that require explicit
+There are 38 module IDs: 16 standard modules and 22 that require explicit
 selection. Without `--modules`, the script runs the standard modules, including
 `ai` and `editors`. Supplying `--modules` replaces that standard selection.
 There is no `all` module ID. Modules run in registry order, shown in the table
@@ -70,7 +72,8 @@ are available without a cleanup run.
 
 Store-specific operations also use native macOS tools: `defaults` and `plutil`
 for Finder preferences, `xattr` for file metadata, `osascript` with CoreServices
-for FSEvents, and `lsof` for open-file checks. No compiler or Python runtime is
+for FSEvents, Foundation for document versions, AppKit for learned words,
+`xcresulttool` for Xcode results, and `lsof` for open-file checks. No compiler or Python runtime is
 required for cleanup. Missing required tools can produce exit `2`; the script
 does not install them.
 
@@ -105,14 +108,20 @@ home directories. There is no single-user selection option.
 | `--spelling-word WORD` | Unlearn one selected word in the active GUI account; repeatable, requires `spelling` |
 | `--version-file PATH` | Select one local document for previous-version removal; repeatable, requires `documentversions` |
 | `--metadata-file PATH` | Select one file for origin metadata cleanup; repeatable, requires `filemetadata` |
+| `--diagnostic-export PATH` | Select a completed diagnostic export; repeatable, requires `diagnosticexports` |
+| `--device-backup PATH` | Select a completed unencrypted MobileSync backup; repeatable, requires `devicebackups` |
+| `--test-result PATH` | Select an Xcode test result bundle; repeatable, requires `testresults` |
+| `--ai-export PATH` | Select an Apple Intelligence report; repeatable, requires `aiexports` |
 | `--ai-root KIND=PATH` | Add a custom AI storage location; repeat for multiple roots |
 
 Module-specific flags do not select their module. For example, use
 `--modules shell --terminal-sessions` or `--modules clipboard --clipboard-current`.
-`slackexport` and `filemetadata` require at least one explicit path. Conversely,
-`--slack-export-root`, `--metadata-file`, and `--terminal-log-file` are rejected
-unless their module is selected. Quote paths that contain spaces. The examples
-use placeholder `/Users/alice/...` paths; replace them with actual targets.
+`slackexport`, `filemetadata`, `documentversions`, `diagnosticexports`,
+`devicebackups`, `testresults`, and `aiexports` require at least one explicit
+path. `spelling` requires at least one `--spelling-word`. Their options, and
+`--terminal-log-file`, are rejected unless the matching module is selected.
+Quote paths that contain spaces. The examples use placeholder `/Users/alice/...`
+paths; replace them with actual targets.
 Age arguments accept integers from 1 through 99999, without leading zeroes.
 
 The scope-expansion flags are off by default. `--ai-root` is additive;
@@ -153,9 +162,9 @@ recording, and shell history can independently retain records of a run.
 | `slackexport` | Explicit | Known data in explicitly selected local Slack exports |
 | `terminal` | Explicit | Terminal/iTerm2 saved output and explicitly selected session logs |
 | `finderhistory` | Explicit | Known Finder and Open/Save history keys |
-| `spelling` | Explicit | Selected learned words in the active GUI account |
-| `documentversions` | Explicit | Previous versions of selected local documents; current file stays |
 | `filemetadata` | Explicit | Origin metadata on explicitly selected files |
+| `documentversions` | Explicit | Previous versions of selected local documents; current file stays |
+| `spelling` | Explicit | Selected learned words in the active GUI account |
 | `notifications` | Explicit | Known delivered Notification Center history |
 | `activity` | Explicit | Known KnowledgeC and IntelligencePlatform event/feedback tables; reports unsupported stores |
 | `siri` | Explicit; manual | Manual Siri/Dictation deletion instructions; real runs report incomplete |
@@ -560,6 +569,139 @@ Spotlight indexes and backups can still contain origin information. See Apple's
 [`kMDItemWhereFroms` reference](https://developer.apple.com/documentation/coreservices/kmditemwherefroms)
 and the native `xattr(1)` manual for the attribute and tool behavior.
 
+### Selected diagnostic exports
+
+`diagnosticexports` is opt-in and requires repeatable `--diagnostic-export PATH`.
+Select exact paths below an eligible `/Users/<user>/` home. No home-wide search
+runs. Completed `sysdiagnose_*.tar.gz` files must have a matching top directory,
+`sysdiagnose.log`, and `system_logs.logarchive/Info.plist`. A selected `.logarchive`
+bundle must pass the native `log stats --archive` check. Unknown or incomplete
+formats, open targets, symlinks, hard-linked files and nested mounts are refused.
+Close collectors and applications that use these exports before cleanup.
+Loose CFNetwork logs and arbitrary diagnostic archives have no supported
+format validator here; inspect and delete selected exports manually.
+
+```bash
+sudo ./shredder.sh --dry-run --modules diagnosticexports \
+  --diagnostic-export /Users/alice/Downloads/sysdiagnose_DATE.tar.gz
+```
+
+Deletion removes the selected local export, including its embedded logs. It does
+not remove copies sent to Apple, cloud copies or backups. Diagnostic exports can
+contain sensitive data. See [Apple diagnostics guidance](https://developer.apple.com/feedback-assistant/)
+and [Apple's log archive example](https://developer.apple.com/documentation/technotes/tn3163-understanding-the-synchronization-of-nspersistentcloudkitcontainer).
+
+### Selected device backups
+
+`devicebackups --device-backup PATH` deletes one explicitly selected, completed,
+unencrypted MobileSync backup. The path must identify a single device backup
+under `/Users/<user>/Library/Application Support/MobileSync/Backup/`. Repeat the
+option to select more backups. The identifier, required property lists, finished
+snapshot state and SQLite `Files` manifest must match the supported format.
+Active backup processes, database sidecars, unknown schemas, encrypted backups
+and older backup formats are refused. Disconnect devices and close backup or
+sync clients first. `--dry-run` performs read-only validation.
+
+The supported layout uses these identity and completion fields:
+
+| File | Required field or layout |
+| --- | --- |
+| `Info.plist` | `Target Identifier`: a string that matches the backup directory ID |
+| `Manifest.plist` | `IsEncrypted`: Boolean `false` |
+| `Status.plist` | `SnapshotState`: string `finished` |
+| `Manifest.db` | Valid SQLite database; `Files` columns in order: `fileID`, `domain`, `relativePath`, `flags`, `file` |
+
+Directory IDs must use 40 hexadecimal characters or 8 hexadecimal characters,
+a hyphen, and 16 hexadecimal characters. An archived backup can add a
+`-YYYYMMDD-HHMMSS` suffix. Its `Target Identifier` still identifies the device.
+The database must pass `quick_check` and have no WAL, SHM or journal sidecar.
+
+This deletes a restore point, including device data and settings. It does not
+remove an iCloud backup. Use Finder's Manage Backups for unsupported formats.
+See [Apple's backup locations and management](https://support.apple.com/en-ie/108809)
+and the [MobileBackup2 implementation](https://github.com/libimobiledevice/libimobiledevice/blob/master/tools/idevicebackup2.c).
+
+### Selected Xcode test results
+
+`testresults --test-result PATH` selects one `.xcresult` bundle below an eligible
+user home. Repeat the option for more bundles. Xcode 16.3 or later must be installed
+and selected: `xcresulttool get content-availability` must accept the bundle.
+Missing tools and invalid or incomplete bundles cause a refusal. Close Xcode,
+`xcodebuild`, `xctest` and result viewers first. Symlinks, hard-linked files, open
+files and nested mounts are refused. `--dry-run` validates without deleting.
+
+This removes selected test results, logs and attachments. Source projects and
+`.xcarchive` distribution archives are not targets. See
+[Apple's xcresulttool command](https://developer.apple.com/documentation/xcode-release-notes/xcode-16_3-release-notes)
+and [test attachments](https://developer.apple.com/documentation/xctest/adding-attachments-to-tests-activities-and-issues).
+
+### Selected Apple Intelligence reports
+
+`aiexports --ai-export PATH` selects an exact local `Apple_Intelligence_Report.json`
+file below an eligible user home. Repeat the option for more files. The parser
+requires a JSON object with the documented `modelRequests` and
+`privateCloudComputeRequests` arrays. It does not inspect or print request content.
+Close System Settings and apps that use the report. Unknown JSON, symlinks,
+hard links and open files are refused. `--dry-run` only validates.
+
+Deleting an exported report does not disable reporting or remove internal or
+remote activity. Change reporting in System Settings > Privacy & Security >
+Apple Intelligence Report separately. Opaque Raycast `.rayconfig` exports are
+not supported: inspect and delete the exact export manually in Finder. The
+script does not infer an encrypted file format from its suffix.
+See [Apple's report format](https://security.apple.com/documentation/private-cloud-compute/appendix_appleintelligencereport),
+[Apple's report export instructions](https://support.apple.com/en-is/guide/mac-help/mchlfc0d4779/mac)
+and [Raycast export guidance](https://manual.raycast.com/import-export).
+
+### Selected document versions
+
+`documentversions` requires an explicit `--version-file /Users/<user>/path`
+for each existing local regular file. Close the file in all apps first.
+
+```bash
+./shredder.sh --modules documentversions --version-file /Users/alice/Documents/report.txt --dry-run --debug
+```
+
+The module calls Apple's `NSFileVersion` API inside an `NSFileCoordinator`
+write operation as the home owner. It removes previous versions and retains the
+current file contents. It does not delete `.DocumentRevisions-V100` directories.
+Dry-run reads version metadata only. The module refuses missing files, links,
+shared hard links, owner mismatches, open files and iCloud documents. It checks
+the file identity again inside the coordinated write. Coordination requires
+cooperating applications; do not rename or modify selected files during cleanup.
+It does not remove copies, backups, remote versions or snapshots, and does not
+guarantee secure erasure. A native API failure is reported, including a partial
+removal failure; the operation cannot restore versions already removed.
+
+Apple's [version-removal API](https://developer.apple.com/documentation/foundation/nsfileversion/removeotherversionsofitem(at:))
+requires coordinated writes and can create a missing file. The module checks
+that the selected file still exists before it calls this API.
+
+### Selected learned words
+
+`spelling --spelling-word WORD` removes only explicitly selected learned words
+through Apple's `NSSpellChecker`. Repeat the option for more words.
+
+```bash
+./shredder.sh --modules spelling --spelling-word exampleword --dry-run --debug
+```
+
+The module requires an eligible active console user and that user's GUI session.
+It runs the native API in that session as that user. It checks whether each word
+is learned before removal and checks again after removal. Dry-run only checks
+learned status. Duplicate words run once. Output does not print the words. The
+words still appear in your command line and can be retained by shell history.
+
+This removes selected spell-checker learned words only. It does not clear all
+keyboard history, predictive text, text replacements, passwords, third-party
+input-method dictionaries or remote copies. It does not delete dictionary
+files or reset preferences. Use System Settings to manage text replacements
+and the input method's own controls for other learned data.
+
+Apple documents [unlearnWord](https://developer.apple.com/documentation/appkit/nsspellchecker/unlearnword(_:))
+and [hasLearnedWord](https://developer.apple.com/documentation/appkit/nsspellchecker/haslearnedword(_:))
+as instance methods for selected words. No complete dictionary reset is claimed.
+
 ### Mail recipients and attachments
 
 `mailhistory` is an explicit manual workflow. Mail recipient suggestions and attachment copies have different deletion scopes. Previous Recipients can sync through iCloud Contacts; Remove Attachments for IMAP also removes server attachments. The module gives these distinctions and the supported app actions. It does not delete the Mail data root.
@@ -957,120 +1099,3 @@ directories are rejected.
 ## License
 
 This project uses the [MIT License](LICENSE).
-
-### Selected diagnostic exports
-
-`diagnosticexports` is opt-in and requires repeatable `--diagnostic-export PATH`.
-Select exact paths below an eligible `/Users/<user>/` home. No home-wide search
-runs. Completed `sysdiagnose_*.tar.gz` files must have a matching top directory,
-`sysdiagnose.log`, and `system_logs.logarchive/Info.plist`. A selected `.logarchive`
-bundle must pass the native `log stats --archive` check. Unknown or incomplete
-formats, open targets, symlinks, hard-linked files and nested mounts are refused.
-Close collectors and applications that use these exports before cleanup.
-
-```bash
-sudo ./shredder.sh --dry-run --modules diagnosticexports \
-  --diagnostic-export /Users/alice/Downloads/sysdiagnose_DATE.tar.gz
-```
-
-Deletion removes the selected local export, including its embedded logs. It does
-not remove copies sent to Apple, cloud copies or backups. Diagnostic exports can
-contain sensitive data. See [Apple diagnostics guidance](https://developer.apple.com/feedback-assistant/)
-and [Apple's log archive example](https://developer.apple.com/documentation/technotes/tn3163-understanding-the-synchronization-of-nspersistentcloudkitcontainer).
-
-### Selected device backups
-
-`devicebackups --device-backup PATH` deletes one explicitly selected, completed,
-unencrypted MobileSync backup. The path must identify a single device backup
-under `/Users/<user>/Library/Application Support/MobileSync/Backup/`. Repeat the
-option to select more backups. The identifier, required property lists, finished
-snapshot state and SQLite `Files` manifest must match the supported format.
-Active backup processes, database sidecars, unknown schemas, encrypted backups
-and older backup formats are refused. Disconnect devices and close backup or
-sync clients first. `--dry-run` performs read-only validation.
-
-This deletes a restore point, including device data and settings. It does not
-remove an iCloud backup. Use Finder's Manage Backups for unsupported formats.
-See [Apple's backup locations and management](https://support.apple.com/en-ie/108809)
-and the [MobileBackup2 implementation](https://github.com/libimobiledevice/libimobiledevice/blob/master/tools/idevicebackup2.c).
-
-### Selected Xcode test results
-
-`testresults --test-result PATH` selects one `.xcresult` bundle below an eligible
-user home. Repeat the option for more bundles. Xcode 16.3 or later must be installed
-and selected: `xcresulttool get content-availability` must accept the bundle.
-Missing tools and invalid or incomplete bundles cause a refusal. Close Xcode,
-`xcodebuild`, `xctest` and result viewers first. Symlinks, hard-linked files, open
-files and nested mounts are refused. `--dry-run` validates without deleting.
-
-This removes selected test results, logs and attachments. Source projects and
-`.xcarchive` distribution archives are not targets. See
-[Apple's xcresulttool command](https://developer.apple.com/documentation/xcode-release-notes/xcode-16_3-release-notes)
-and [test attachments](https://developer.apple.com/documentation/xctest/adding-attachments-to-tests-activities-and-issues).
-
-### Selected Apple Intelligence reports
-
-`aiexports --ai-export PATH` selects an exact local `Apple_Intelligence_Report.json`
-file below an eligible user home. Repeat the option for more files. The parser
-requires a JSON object with the documented `modelRequests` and
-`privateCloudComputeRequests` arrays. It does not inspect or print request content.
-Close System Settings and apps that use the report. Unknown JSON, symlinks,
-hard links and open files are refused. `--dry-run` only validates.
-
-Deleting an exported report does not disable reporting or remove internal or
-remote activity. Change reporting in System Settings > Privacy & Security >
-Apple Intelligence Report separately. Opaque Raycast `.rayconfig` exports are
-not supported: inspect and delete the exact export manually in Finder. The
-script does not infer an encrypted file format from its suffix.
-See [Apple's report format](https://security.apple.com/documentation/private-cloud-compute/appendix_appleintelligencereport),
-[Apple's report export instructions](https://support.apple.com/en-is/guide/mac-help/mchlfc0d4779/mac)
-and [Raycast export guidance](https://manual.raycast.com/import-export).
-
-### Selected document versions
-
-`documentversions` requires an explicit `--version-file /Users/<user>/path`
-for each existing local regular file. Close the file in all apps first.
-
-```bash
-./shredder.sh --modules documentversions --version-file /Users/alice/Documents/report.txt --dry-run --debug
-```
-
-The module calls Apple's `NSFileVersion` API inside an `NSFileCoordinator`
-write operation as the home owner. It removes previous versions and retains the
-current file contents. It does not delete `.DocumentRevisions-V100` directories.
-Dry-run reads version metadata only. The module refuses missing files, links,
-shared hard links, owner mismatches, open files and iCloud documents. It checks
-the file identity again inside the coordinated write. Coordination requires
-cooperating applications; do not rename or modify selected files during cleanup.
-It does not remove copies, backups, remote versions or snapshots, and does not
-guarantee secure erasure. A native API failure is reported, including a partial
-removal failure; the operation cannot restore versions already removed.
-
-Apple's [version-removal API](https://developer.apple.com/documentation/foundation/nsfileversion/removeotherversionsofitem(at:))
-requires coordinated writes and can create a missing file. The module checks
-that the selected file still exists before it calls this API.
-
-### Selected learned words
-
-`spelling --spelling-word WORD` removes only explicitly selected learned words
-through Apple's `NSSpellChecker`. Repeat the option for more words.
-
-```bash
-./shredder.sh --modules spelling --spelling-word exampleword --dry-run --debug
-```
-
-The module requires an eligible active console user and that user's GUI session.
-It runs the native API in that session as that user. It checks whether each word
-is learned before removal and checks again after removal. Dry-run only checks
-learned status. Duplicate words run once. Output does not print the words. The
-words still appear in your command line and can be retained by shell history.
-
-This removes selected spell-checker learned words only. It does not clear all
-keyboard history, predictive text, text replacements, passwords, third-party
-input-method dictionaries or remote copies. It does not delete dictionary
-files or reset preferences. Use System Settings to manage text replacements
-and the input method's own controls for other learned data.
-
-Apple documents [unlearnWord](https://developer.apple.com/documentation/appkit/nsspellchecker/unlearnword(_:))
-and [hasLearnedWord](https://developer.apple.com/documentation/appkit/nsspellchecker/haslearnedword(_:))
-as instance methods for selected words. No complete dictionary reset is claimed.

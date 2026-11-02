@@ -19,6 +19,8 @@ See the [module reference](../README.md#modules) for cleanup scope and the
 - `shasum` or `sha256sum`, plus `gzip`, `cmp`, and `diff`.
 - Native `plutil`, `defaults`, and `xattr` for macOS fixture checks. Linux does
   not need these tools; platform-specific checks use the boundaries below.
+- Python 3 on Linux for the device-backup plist fixture adapter. Cleanup does
+  not require Python. macOS fixture tests use native plist tools.
 - ShellCheck for the optional lint command below.
 
 No root privileges are required. From the repository root:
@@ -51,7 +53,7 @@ checkpoint truncation can complete.
 
 ## Test files
 
-`run-tests.sh` runs phases A–O first, then these 17 feature suites in order:
+`run-tests.sh` runs phases A–O first, then these 25 feature suites in order:
 
 | File | Role |
 | --- | --- |
@@ -71,7 +73,14 @@ checkpoint truncation can complete.
 | [finder-history.sh](finder-history.sh) | Known Finder/Open-Save keys and native preference preservation |
 | [system-traces.sh](system-traces.sh) | Log retention and FSEvents command contracts |
 | [file-metadata.sh](file-metadata.sh) | Selected origin attributes, retained content, and link refusal |
+| [document-versions.sh](document-versions.sh) | Native synthetic document versions, current-content retention and path refusal |
+| [spelling.sh](spelling.sh) | Selected learned words through a boundary double; native test-mode refusal |
 | [activity-stores.sh](activity-stores.sh) | Notification/activity SQLite stores and manual Siri reporting |
+| [diagnostic-exports.sh](diagnostic-exports.sh) | Selected diagnostic archive formats and filesystem guards |
+| [device-backups.sh](device-backups.sh) | Completed unencrypted MobileSync formats and plist/manifest checks |
+| [test-results.sh](test-results.sh) | Native malformed-result rejection and tool-boundary dispatch |
+| [ai-exports.sh](ai-exports.sh) | Selected Apple Intelligence report schema and opaque export retention |
+| [manual-privacy.sh](manual-privacy.sh) | Manual app guidance, zero cleaned items and fixture preservation |
 | [alfred.sh](alfred.sh) | Alfred manual instructions, incomplete status, and complete fixture preservation |
 
 Supporting scripts:
@@ -283,3 +292,8 @@ boundary always refuses test mode. On macOS the suite checks native selector
 availability without creating a spell checker or changing any learned words.
 A temporary HOME does not isolate the user's dictionary service, so the suite
 does not claim live dictionary mutation coverage.
+
+Positive acceptance of a real `.logarchive` is not covered by these fixtures.
+The diagnostic suite validates a synthetic sysdiagnose archive; the native
+archive and Xcode validators reject malformed fixtures. Live spell-checker
+mutation is also untested; the suite never changes the host dictionary.
