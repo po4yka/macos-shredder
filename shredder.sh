@@ -1864,36 +1864,53 @@ module_audit() {
         clean_aged_audit_logs
         return 0
     fi
+    if [ "$TEST_MODE" -eq 0 ] && command -v audit >/dev/null 2>&1 && audit -c >/dev/null 2>&1; then
+        audit_enabled=1
+    fi
+    current_target="$(readlink "$VAR_AUDIT/current" 2>/dev/null || true)"
+    current_target="${current_target##*/}"
+    if [ "$audit_enabled" -eq 1 ] && [ -z "$current_target" ]; then
+        log_warn "cannot identify the active audit record; refusing trail deletion"
+        [ "$DRY_RUN" -eq 1 ] || FAILED_COUNT=$((FAILED_COUNT + 1))
+        return 0
+    fi
     if [ "$DRY_RUN" -eq 1 ]; then
         local n=0 dry_file dry_base
-        current_target="$(readlink "$VAR_AUDIT/current" 2>/dev/null || true)"
-        current_target="${current_target##*/}"
         while read_find_path dry_file; do
             dry_base="${dry_file##*/}"
-            [ -n "$current_target" ] && [ "$dry_base" = "$current_target" ] && continue
+            # A real run rotates the active record first and then removes it.
+            [ "$audit_enabled" -eq 0 ] && [ -n "$current_target" ] \
+                && [ "$dry_base" = "$current_target" ] && continue
             n=$((n + 1))
         done < <(find_checked "$VAR_AUDIT" -maxdepth 1 \( -type f -o -type l \) -name '[0-9]*' -print0)
         log_debug "[DRY RUN] would remove $n timestamped audit files under $VAR_AUDIT (preserving 'current')"
         CLEANED_COUNT=$((CLEANED_COUNT + n))
         return 0
     fi
-    if [ "$TEST_MODE" -eq 0 ] && command -v audit >/dev/null 2>&1 && audit -c >/dev/null 2>&1; then
-        audit_enabled=1
+    if [ "$audit_enabled" -eq 1 ]; then
         log_debug "rotating current audit record (audit -n)"
         if ! audit -n >/dev/null 2>&1; then
             log_warn "failed to rotate the active audit record"
             FAILED_COUNT=$((FAILED_COUNT + 1))
             return 0
         fi
+        # auditd can update the current link after audit -n returns. Wait for
+        # the new record, so that the new active file is never removed.
+        local previous_target="$current_target" tries=0
+        while [ "$tries" -lt 50 ]; do
+            current_target="$(readlink "$VAR_AUDIT/current" 2>/dev/null || true)"
+            current_target="${current_target##*/}"
+            [ -z "$current_target" ] || [ "$current_target" = "$previous_target" ] || break
+            sleep 0.1 2>/dev/null || break
+            tries=$((tries + 1))
+        done
+        if [ -z "$current_target" ] || [ "$current_target" = "$previous_target" ]; then
+            log_warn "the active audit record did not change after rotation; refusing trail deletion"
+            FAILED_COUNT=$((FAILED_COUNT + 1))
+            return 0
+        fi
     else
         log_debug "BSM audit is unavailable or disabled; deleting existing trail files only"
-    fi
-    current_target="$(readlink "$VAR_AUDIT/current" 2>/dev/null || true)"
-    current_target="${current_target##*/}"
-    if [ "$audit_enabled" -eq 1 ] && [ -z "$current_target" ]; then
-        log_warn "cannot identify the active audit record; refusing trail deletion"
-        FAILED_COUNT=$((FAILED_COUNT + 1))
-        return 0
     fi
     # Delete timestamped trail files by basename pattern; never touch the
     # file referenced by the 'current' symlink.

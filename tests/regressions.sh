@@ -472,3 +472,41 @@ test_refusal_counted_once() (
 )
 test_refusal_counted_once
 printf 'PASS: a refused database link is counted once\n'
+
+test_audit_rotation() (
+    setup_case audit-rotation
+    mkdir -p "$VAR_AUDIT"
+    printf 'old\n' > "$VAR_AUDIT/20260101000000.20260102000000"
+    printf 'active\n' > "$VAR_AUDIT/20260102000000.not_terminated"
+    ln -s "$VAR_AUDIT/20260102000000.not_terminated" "$VAR_AUDIT/current"
+    TEST_MODE=0
+    # shellcheck disable=SC2329 # called by module_audit
+    audit() {
+        case "$1" in
+            -c) return 0 ;;
+            -n) [ "${ROTATE:-0}" -eq 0 ] && return 0
+                printf 'new\n' > "$VAR_AUDIT/20260103000000.not_terminated"
+                ln -sfn "$VAR_AUDIT/20260103000000.not_terminated" "$VAR_AUDIT/current" ;;
+        esac
+    }
+    # shellcheck disable=SC2329 # keep the rotation wait short in tests
+    sleep() { :; }
+    # The dry-run counts the active record, which a real run rotates first.
+    DRY_RUN=1
+    module_audit
+    [ "$CLEANED_COUNT" -eq 2 ]
+    DRY_RUN=0; CLEANED_COUNT=0
+    # auditd did not switch records: nothing may be deleted.
+    module_audit
+    [ "$FAILED_COUNT" -eq 1 ]
+    [ -s "$VAR_AUDIT/20260101000000.20260102000000" ]
+    [ -s "$VAR_AUDIT/20260102000000.not_terminated" ]
+    FAILED_COUNT=0
+    ROTATE=1 module_audit
+    [ "$FAILED_COUNT" -eq 0 ]
+    [ ! -e "$VAR_AUDIT/20260101000000.20260102000000" ]
+    [ ! -e "$VAR_AUDIT/20260102000000.not_terminated" ]
+    [ -s "$VAR_AUDIT/20260103000000.not_terminated" ]
+)
+test_audit_rotation
+printf 'PASS: audit trails are removed only after the active record changes\n'
