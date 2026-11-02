@@ -123,7 +123,7 @@ remove it when finished. Never mark a real home or mounted volume as a sandbox.
 | Phase | Required behavior |
 | --- | --- |
 | A — CLI validation | Invalid or empty module selections return `64` and retain data |
-| B — module listing | `--list` returns `0` and includes all 20 module IDs |
+| B — module listing | `--list` returns `0` and includes all 21 module IDs |
 | C — forced cleanup | Selected fixture data is removed for both users; bookmarks, audit `current`, excluded homes, and external-volume sentinels remain; corrupt SQLite makes verification fail |
 | D — dry-run | File hashes, directories, and symlink targets match the pre-run manifest; an added file makes verification fail |
 | E — sandbox guard | An unmarked root is refused before cleanup |
@@ -184,3 +184,9 @@ The fixture checks do not establish secure erasure on APFS or SSDs. They verify
 selected logical removals and preservation rules against the tested layouts.
 
 `terminal-output.sh` checks explicit selection, saved output removal, retained settings, custom file boundaries, dry-run stability and process-query refusal.
+
+`finder-history.sh` tests preview/path/process safety on all test hosts. On
+macOS it also uses native `plutil` and `defaults` on synthetic temporary
+plists: XML/binary preservation, exact key deletion, repeat runs and refusal
+of unknown types, malformed files and hardlinks. Linux reports the native
+part as unavailable; it does not emulate the Apple preference API.

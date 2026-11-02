@@ -4,7 +4,7 @@
 #
 # Phases:
 #   A  usage validation   unknown --modules value -> exit 64 + valid ids listed
-#   B  module listing     --list -> exit 0 + all 20 module ids present
+#   B  module listing     --list -> exit 0 + all 21 module ids present
 #   C  forced clean       artifacts -> --force --debug -> post-state verified
 #   D  dry-run safety     artifacts+manifest -> -n -f -> byte-identical state
 #   E  sandbox guard      unmarked SHREDDER_ROOT -> fatal refusal
@@ -40,7 +40,7 @@ VERIFY_CLEANUP="$SCRIPT_DIR/verify-cleanup.sh"
 
 readonly MODULE_IDS=(
   shell systemlogs audit browser unified fileevents usage spotlight
-  quicklook trash dsstore wifi brew apps editors ai clipboard headless slackexport terminal
+  quicklook trash dsstore wifi brew apps editors ai clipboard headless slackexport terminal finderhistory
 )
 
 WORK=''
@@ -539,4 +539,5 @@ bash "$SCRIPT_DIR/ai-extended.sh"
 bash "$SCRIPT_DIR/headless.sh"
 bash "$SCRIPT_DIR/slack-export.sh"
 bash "$SCRIPT_DIR/terminal-output.sh"
+bash "$SCRIPT_DIR/finder-history.sh"
 info 'all phases and regressions passed'

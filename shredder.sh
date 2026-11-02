@@ -113,6 +113,7 @@ MODULE_IDS=(
     headless
     slackexport
     terminal
+    finderhistory
 )
 MODULE_DESCS=(
     "Shell and REPL histories, session data"
@@ -135,6 +136,7 @@ MODULE_DESCS=(
     "Old Chrome Headless profiles (explicit selection only)"
     "Selected local Slack exports (explicit selection only)"
     "Terminal saved output and selected logs (explicit selection only)"
+    "Finder and Open/Save history keys (explicit selection only)"
 )
 
 # Color codes; filled by setup_colors(), left empty when colors are disabled.
@@ -3659,9 +3661,101 @@ module_terminal() {
     return 0
 }
 
+# --- module: finderhistory ---------------------------------------------------
+
+finder_history_clients_stopped() {
+    [ "$TEST_MODE" -eq 0 ] || return 0
+    local processes
+    processes="$(ps -axo command= 2>/dev/null)" || return 1
+    if printf '%s\n' "$processes" | grep -E '(^|[ /])(Finder|com\.apple\.appkit\.xpc\.openAndSavePanelService)([[:space:]/]|$)' >/dev/null; then
+        return 1
+    fi
+    return 0
+}
+
+# Retain the mixed preference file and all keys outside this exact allowlist.
+# defaults uses the preference API, avoiding direct edits behind cfprefsd.
+# The file and known value types are checked again as the home owner before
+# the first mutation. A changed/unknown type stops the whole file operation.
+finder_history_plist() {
+    local file="$1" kind="$2" specs result
+    guard_mutation_target "$file" || return 0
+    [ -e "$file" ] || return 0
+    if [ ! -f "$file" ]; then
+        log_warn "finderhistory: expected a preference file, retaining: $file"
+        FAILED_COUNT=$((FAILED_COUNT + 1)); return 0
+    fi
+    case "$kind" in
+        finder) specs='FXRecentFolders:array GoToFieldHistory:array GoToField:string FXConnectToLastURL:string RecentMoveAndCopyDestinations:array RecentSearches:array' ;;
+        panels) specs='NSNavRecentPlaces:array' ;;
+        *) FAILED_COUNT=$((FAILED_COUNT + 1)); return 0 ;;
+    esac
+    if [ "$DRY_RUN" -eq 1 ]; then
+        log_debug "[DRY RUN] would clear known $kind history keys: $file"
+        CLEANED_COUNT=$((CLEANED_COUNT + 1)); return 0
+    fi
+    if [ ! -x /usr/bin/plutil ] || [ ! -x /usr/bin/defaults ]; then
+        log_warn "finderhistory: native plutil and defaults are required; retaining: $file"
+        FAILED_COUNT=$((FAILED_COUNT + 1)); return 0
+    fi
+    # No preference values are printed or copied into the operation log.
+    # shellcheck disable=SC2016
+    if result="$(run_target_command "$file" /bin/sh -c '
+        file=$1; specs=$2; parent=${file%/*}; entry=${file##*/}
+        cd -P "$parent" || exit 1
+        [ "$(pwd -P)" = "$parent" ] || exit 1
+        [ -f "./$entry" ] && [ ! -L "./$entry" ] || exit 1
+        [ "$(/usr/bin/stat -f %l "./$entry")" = 1 ] || exit 1
+        [ "$(/usr/bin/stat -f %u "./$entry")" = "$(/usr/bin/id -u)" ] || exit 1
+        /usr/bin/plutil -lint -s "$file" >/dev/null 2>&1 || exit 1
+        keys=""
+        for spec in $specs; do
+            key=${spec%:*}; expected=${spec#*:}
+            actual=$(/usr/bin/plutil -type "$key" "$file" 2>/dev/null) || continue
+            [ "$actual" = "$expected" ] || exit 1
+            keys="$keys $key"
+        done
+        [ -n "$keys" ] || { printf "absent"; exit 0; }
+        for key in $keys; do
+            /usr/bin/defaults delete "$file" "$key" >/dev/null 2>&1 || exit 1
+        done
+        /usr/bin/plutil -lint -s "$file" >/dev/null 2>&1 || exit 1
+        for key in $keys; do
+            if /usr/bin/plutil -type "$key" "$file" >/dev/null 2>&1; then exit 1; fi
+        done
+        printf "cleaned"
+    ' sh "$file" "$specs" 2>/dev/null)"; then
+        if [ "$result" = cleaned ]; then
+            CLEANED_COUNT=$((CLEANED_COUNT + 1))
+            log_debug "cleared known $kind history keys: $file"
+        fi
+    else
+        log_warn "finderhistory: cannot safely clear preference history: $file"
+        FAILED_COUNT=$((FAILED_COUNT + 1))
+    fi
+    return 0
+}
+
+module_finderhistory() {
+    local u h uid
+    if ! finder_history_clients_stopped; then
+        log_warn "finderhistory: quit Finder and close Open/Save dialogs before cleanup"
+        if [ "$DRY_RUN" -eq 0 ]; then
+            FAILED_COUNT=$((FAILED_COUNT + 1)); return 0
+        fi
+    fi
+    while IFS=$'\t' read -r u h uid; do
+        finder_history_plist "$h/Library/Preferences/com.apple.finder.plist" finder
+        finder_history_plist "$h/Library/Preferences/.GlobalPreferences.plist" panels
+        finder_history_plist "$h/Library/Preferences/com.apple.appkit.xpc.openAndSavePanelService.plist" panels
+        finder_history_plist "$h/Library/Containers/com.apple.appkit.xpc.openAndSavePanelService/Data/Library/Preferences/com.apple.appkit.xpc.openAndSavePanelService.plist" panels
+    done < <(enumerate_users)
+    return 0
+}
+
 module_selected() {
     if [ -z "$SELECTED_MODULES" ]; then
-        case "$1" in clipboard|headless|slackexport|terminal) return 1 ;; *) return 0 ;; esac
+        case "$1" in clipboard|headless|slackexport|terminal|finderhistory) return 1 ;; *) return 0 ;; esac
     fi
     case ",$SELECTED_MODULES," in
         *",$1,"*) return 0 ;;
@@ -3691,6 +3785,7 @@ run_module() {
         headless)    module_headless ;;
         slackexport) module_slackexport ;;
         terminal)    module_terminal ;;
+        finderhistory) module_finderhistory ;;
         *)
             log_warn "unknown module id in dispatch: $1"
             ;;
@@ -3703,7 +3798,7 @@ run_selected_modules() {
     if [ -n "$SELECTED_MODULES" ]; then
         log_info "running modules: $(printf '%s' "$SELECTED_MODULES" | tr ',' ' ')"
     else
-        log_info "running modules: standard (clipboard, headless, slackexport and terminal require selection)"
+        log_info "running modules: standard (clipboard, headless, slackexport, terminal and finderhistory require selection)"
     fi
     for id in "${MODULE_IDS[@]}"; do
         if module_selected "$id"; then

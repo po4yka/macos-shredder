@@ -40,7 +40,7 @@ sudo ./shredder.sh --modules shell,browser,trash --force
 ```
 
 Without `--modules`, the script runs the 16 standard modules, including `ai`
-and `editors`. The additional `clipboard`, `headless`, `slackexport`, and `terminal`
+and `editors`. The additional `clipboard`, `headless`, `slackexport`, `terminal`, and `finderhistory`
 modules require explicit selection. Modules run in the order listed below, regardless of the order in
 `--modules`. Without `--force`, a real run asks for confirmation. `--force`
 only skips that prompt; it does not bypass process, path, or database checks.
@@ -115,6 +115,7 @@ Dry-run and `--list` do not create logs.
 | `ai` | Local sessions for Claude Code, Codex, OpenCode, Cursor, Windsurf, Continue, Cline/Roo, and Aider |
 | `clipboard` | Known Maccy clipboard history; explicit selection only |
 | `headless` | Old, unlocked Chrome Headless temporary profiles; explicit selection only |
+| `finderhistory` | Known Finder and Open/Save history keys; explicit selection only |
 | `terminal` | Terminal/iTerm2 saved output and explicitly selected session logs; explicit selection only |
 | `slackexport` | Known data in explicitly selected local Slack exports; explicit selection only |
 
@@ -566,7 +567,7 @@ that directory. Root-owned user directories are refused.
 ## Tests
 
 The integration suite uses temporary sandboxes for cleanup. It covers CLI
-behavior, all 20 modules, dry-run stability, process and path checks, AI and
+behavior, all 21 modules, dry-run stability, process and path checks, AI and
 editor settings preservation, shell stores, browser origins and tab recovery,
 and mounted-volume Trash. SQLite tests cover transaction rollback, active
 readers and writers, WAL cleanup, unknown schemas, and retained credentials.
@@ -613,3 +614,31 @@ that APFS snapshots, backups or external log copies have been erased.
 The scope follows the [iTerm2 restoration implementation](https://github.com/gnachman/iTerm2/blob/master/sources/StateRestoration/iTermRestorableStateController.m),
 [session restoration documentation](https://iterm2.com/documentation-restoration.html)
 and [session logging settings](https://iterm2.com/documentation-preferences-profiles-session.html).
+
+### Finder and Open/Save history
+
+`--modules finderhistory` clears only these keys in
+`~/Library/Preferences/com.apple.finder.plist`: `FXRecentFolders`,
+`GoToFieldHistory`, `GoToField`, `FXConnectToLastURL`,
+`RecentMoveAndCopyDestinations` and `RecentSearches`. It also clears
+`NSNavRecentPlaces` in `.GlobalPreferences.plist` and in the
+`com.apple.appkit.xpc.openAndSavePanelService.plist` preferences, including
+the service container under `~/Library/Containers/`.
+
+Quit Finder and close Open/Save dialogs before cleanup. A running Finder or
+panel service, or a failed process query, blocks writes. The module does not
+quit applications for you. Close other applications that may retain recent
+places in memory; they can write history again later.
+
+Only supported string or array values are removed with native macOS
+`defaults delete <plist-path> <key>`. Unknown keys, favorites, desktop icon
+positions, window settings and unsaved documents remain. A malformed plist,
+unexpected history type, link or wrong owner blocks that file. The module
+does not remove the whole preferences file or reset system preferences.
+A dry-run lists candidate files without validating their contents.
+
+Other application-specific Open/Save histories and renamed or future keys
+are outside this allowlist. Use `usage` for shared recent-document lists.
+These paths and key meanings are described in the
+[JPCERT macOS forensics workshop, page 106](https://jsac.jpcert.or.jp/archive/2022/pdf/JSAC2022_workshop_macOS-forensic_en.pdf).
+The Finder key names were also checked against the installed Finder executable.
