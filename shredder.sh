@@ -880,10 +880,14 @@ purge_snapshots() {
         FAILED_COUNT=$((FAILED_COUNT + 1))
         return 0
     fi
-    local snaps snap
-    snaps="$(tmutil listlocalsnapshots / 2>/dev/null \
-        | grep -E '^com\.apple\.TimeMachine\.[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]\.local$' \
-        || true)"
+    local snaps snap listing
+    if ! listing="$(tmutil listlocalsnapshots / 2>/dev/null)"; then
+        log_warn "failed to enumerate local Time Machine snapshots"
+        FAILED_COUNT=$((FAILED_COUNT + 1))
+        return 0
+    fi
+    snaps="$(printf '%s\n' "$listing" \
+        | grep -E '^com\.apple\.TimeMachine\.[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]\.local$' || true)"
     if [ -z "$snaps" ]; then
         log_info "no local Time Machine snapshots found"
         return 0

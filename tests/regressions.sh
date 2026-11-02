@@ -42,3 +42,26 @@ test_find_failure() (
 
 test_find_failure
 printf 'PASS: traversal failures are reported\n'
+
+test_snapshot_listing() (
+    setup_case snapshot-listing
+    TEST_MODE=0
+    # shellcheck disable=SC2329 # fault injection for purge_snapshots
+    tmutil() { return 1; }
+    purge_snapshots
+    [ "$FAILED_COUNT" -eq 1 ]
+    [ "$CLEANED_COUNT" -eq 0 ]
+    FAILED_COUNT=0
+    # shellcheck disable=SC2329 # empty, successful listing
+    tmutil() { printf 'Snapshots for volume group containing disk /:\n'; }
+    purge_snapshots
+    [ "$FAILED_COUNT" -eq 0 ]
+    [ "$CLEANED_COUNT" -eq 0 ]
+    DRY_RUN=1
+    # shellcheck disable=SC2329 # a valid listing; dry-run forbids deletion
+    tmutil() { printf 'com.apple.TimeMachine.2026-11-02-100000.local\n'; }
+    purge_snapshots
+    [ "$CLEANED_COUNT" -eq 1 ]
+)
+test_snapshot_listing
+printf 'PASS: snapshot listing errors differ from an empty list\n'
