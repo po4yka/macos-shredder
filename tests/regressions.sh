@@ -65,3 +65,15 @@ test_snapshot_listing() (
 )
 test_snapshot_listing
 printf 'PASS: snapshot listing errors differ from an empty list\n'
+
+test_wifi_store() (
+    setup_case wifi-store
+    mkdir -p "$SYS_PREFS"
+    printf 'known networks\n' > "$SYS_PREFS/com.apple.wifi.known-networks.plist"
+    /bin/bash "$SHREDDER" --dry-run --modules wifi >/dev/null 2>&1
+    grep -q '^known networks$' "$SYS_PREFS/com.apple.wifi.known-networks.plist"
+    /bin/bash "$SHREDDER" --force --modules wifi >/dev/null 2>&1
+    [ ! -e "$SYS_PREFS/com.apple.wifi.known-networks.plist" ]
+)
+test_wifi_store
+printf 'PASS: current Wi-Fi store is removed only in a real run\n'

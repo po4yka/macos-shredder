@@ -1482,6 +1482,7 @@ module_dsstore() {
 # --- module: wifi ------------------------------------------------------------
 module_wifi() {
     local f
+    remove_path "$SYS_PREFS/com.apple.wifi.known-networks.plist"
     remove_path "$SYS_PREFS/SystemConfiguration/com.apple.airport.preferences.plist"
     remove_path "$SYS_PREFS/SystemConfiguration/com.apple.wifi.message-tracer.plist"
     clear_dir_contents "$SYS_PREFS/SystemConfiguration/com.apple.wifi.known-networks"
