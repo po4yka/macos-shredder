@@ -662,3 +662,17 @@ STUB
 )
 test_process_match_without_sigpipe
 printf 'PASS: process matches do not depend on grep reading all input\n'
+
+test_unified_runs_last() (
+    setup_case unified-last
+    local order="$WORK/unified-order"
+    # shellcheck disable=SC2329 # records dispatch order
+    run_module() { printf '%s\n' "$1" >> "$order"; }
+    # shellcheck disable=SC2329 # run steps inline for this order check
+    run_cleanup_step() { shift; "$@"; }
+    SELECTED_MODULES="shell,unified,usage"
+    run_selected_modules 2>/dev/null
+    [ "$(tr '\n' ' ' < "$order")" = 'shell usage unified ' ]
+)
+test_unified_runs_last
+printf 'PASS: unified runs after the other selected modules\n'

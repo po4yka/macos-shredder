@@ -1311,7 +1311,7 @@ purge_snapshots() {
 ###############################################################################
 # SECTION: Modules
 #
-# Fixed execution order = MODULE_IDS order. Per-user work always follows the
+# Fixed execution order = MODULE_IDS order, except that unified runs last. Per-user work always follows the
 # pattern: enumerate_users consumed via while-read (process substitution so
 # counters stay in the current shell), guarded by [ -d "$h" ].
 ###############################################################################
@@ -5122,12 +5122,19 @@ run_selected_modules() {
     else
         log_info "running modules: standard (additional modules require explicit selection; see --list)"
     fi
+    # Run unified last: the other modules write log entries of their own (for
+    # example, sudo records each owner-UID command with its path).
     for id in "${MODULE_IDS[@]}"; do
+        [ "$id" != unified ] || continue
         if module_selected "$id"; then
             log_debug "=== module: $id ==="
             run_cleanup_step "$id" run_module "$id"
         fi
     done
+    if module_selected unified; then
+        log_debug "=== module: unified ==="
+        run_cleanup_step unified run_module unified
+    fi
     return 0
 }
 

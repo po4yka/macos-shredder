@@ -59,8 +59,9 @@ There are 38 module IDs: 16 standard modules and 22 that require explicit
 selection. Without `--modules`, the script runs the standard modules, including
 `ai` and `editors`. Supplying `--modules` replaces that standard selection.
 There is no `all` module ID. Modules run in registry order, shown in the table
-below, regardless of the order in `--modules`. Without `--force`, a real run
-asks for confirmation. `--force` only skips that prompt; it does not bypass process, path, or database checks.
+below, regardless of the order in `--modules`. The exception is `unified`,
+which runs last, so that it also erases log entries made during the run.
+Without `--force`, a real run asks for confirmation. `--force` only skips that prompt; it does not bypass process, path, or database checks.
 
 Real cleanup requires macOS, Bash 3.2 or later, root privileges, and access to
 the selected files. Mixed database and JSON cleanup requires `sqlite3` with
