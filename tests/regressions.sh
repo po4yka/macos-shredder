@@ -329,3 +329,23 @@ test_dsstore_volume_alias() (
 )
 test_dsstore_volume_alias
 printf 'PASS: dsstore volume scan skips the startup-disk alias\n'
+
+test_volume_parent_race() (
+    setup_case volume-race
+    local outside="$WORK/volume-race-outside"
+    mkdir -p "$SANDBOX/Volumes/USB/folder" "$outside"
+    printf 'trace\n' > "$SANDBOX/Volumes/USB/folder/.DS_Store"
+    printf 'keep\n' > "$outside/.DS_Store"
+    # Replace the parent with a link after the guard has accepted it.
+    # shellcheck disable=SC2329 # called by remove_path in the sourced script
+    guard_mutation_target() {
+        rm -rf "$SANDBOX/Volumes/USB/folder"
+        ln -s "$outside" "$SANDBOX/Volumes/USB/folder"
+        return 0
+    }
+    remove_path "$SANDBOX/Volumes/USB/folder/.DS_Store"
+    [ -s "$outside/.DS_Store" ]
+    [ "$FAILED_COUNT" -eq 1 ]
+)
+test_volume_parent_race
+printf 'PASS: a replaced volume parent cannot redirect deletion\n'

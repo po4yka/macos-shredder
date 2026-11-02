@@ -379,7 +379,7 @@ run_target_command() {
     "$sudo_bin" -u "#$owner_uid" -- "$@"
 }
 
-# Pin the cache parent as the working directory before deletion. A replacement
+# Pin the cache or volume parent as the working directory before deletion. A replacement
 # with a symlink must fail the physical-path check. Later renames cannot redirect
 # the relative rm operand to a different parent. Run this after dropping privileges.
 remove_cache_entry() {
@@ -422,7 +422,9 @@ remove_path() {
     fi
     local result=0
     case "$target" in
-        "$VAR_FOLDERS"/*) remove_cache_entry "$target" "$remove_flags" 2>/dev/null || result=$? ;;
+        # Shared cache trees and other users' volumes stay writable by others.
+        # Pin the physical parent so a raced link cannot redirect deletion.
+        "$VAR_FOLDERS"/*|"$SANDBOX"/Volumes/*) remove_cache_entry "$target" "$remove_flags" 2>/dev/null || result=$? ;;
         *) run_target_command "$target" /bin/rm "$remove_flags" -- "$target" 2>/dev/null || result=$? ;;
     esac
     if [ "$result" -eq 0 ]; then
