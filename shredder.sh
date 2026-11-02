@@ -784,6 +784,20 @@ process_list() {
             }'
 }
 
+# home_uid HOME [UID] - print the account UID of HOME. Directory-service UIDs
+# win; the fallback enumerator has none, so read the home owner instead.
+home_uid() {
+    local home="$1" uid="${2:-}" value
+    case "$uid" in
+        ''|*[!0-9]*) ;;
+        *) printf '%s\n' "$uid"; return 0 ;;
+    esac
+    value="$(stat -f %u "$home" 2>/dev/null || true)"
+    case "$value" in ''|*[!0-9]*) value="$(stat -c %u "$home" 2>/dev/null || true)" ;; esac
+    case "$value" in ''|*[!0-9]*) return 1 ;; esac
+    printf '%s\n' "$value"
+}
+
 # A failed process query blocks browser mutations just like a running browser.
 browser_running() {
     local proc="$1" rc=0
@@ -4071,10 +4085,13 @@ add_terminal_log_file() {
     TERMINAL_LOG_FILES+=("$path")
 }
 
+# terminal_clients_stopped UID - Terminal and iTerm2 rewrite only their own
+# account's saved state, so another user's open terminal does not block.
 terminal_clients_stopped() {
     [ "$TEST_MODE" -eq 0 ] || return 0
     local processes
-    processes="$(process_list command)" || return 1
+    [ -n "${1:-}" ] || return 1
+    processes="$(process_list command "$1")" || return 1
     if printf '%s\n' "$processes" | grep -Ei '(^|[ /])(Terminal|iTerm2?|iTermServer[^ /]*)([[:space:]/]|$)' >/dev/null; then
         return 1
     fi
@@ -4094,26 +4111,33 @@ terminal_saved_state() {
 }
 
 module_terminal() {
-    local u h uid path item matched
-    if ! terminal_clients_stopped; then
-        log_warn "terminal: close Terminal, iTerm2 and restoration servers before cleanup"
-        if [ "$DRY_RUN" -eq 0 ]; then
-            FAILED_COUNT=$((FAILED_COUNT + 1)); return 0
-        fi
-    fi
+    local u h uid path item matched owner
     while IFS=$'\t' read -r u h uid; do
+        owner="$(home_uid "$h" "$uid")" || owner=""
+        if ! terminal_clients_stopped "$owner"; then
+            log_warn "terminal: close Terminal, iTerm2 and restoration servers of $u before cleanup"
+            if [ "$DRY_RUN" -eq 0 ]; then
+                FAILED_COUNT=$((FAILED_COUNT + 1)); continue
+            fi
+        fi
         terminal_saved_state "$h/Library/Saved Application State/com.apple.Terminal.savedState"
         terminal_saved_state "$h/Library/Saved Application State/com.googlecode.iterm2.savedState"
         terminal_saved_state "$h/Library/Application Support/iTerm2/SavedState"
     done < <(enumerate_users)
     for item in ${TERMINAL_LOG_FILES[@]+"${TERMINAL_LOG_FILES[@]}"}; do
-        path="$SANDBOX$item"; matched=0
+        path="$SANDBOX$item"; matched=0; owner=""
         while IFS=$'\t' read -r u h uid; do
-            case "$path" in "$h"/*) matched=1 ;; esac
+            case "$path" in "$h"/*) matched=1; owner="$(home_uid "$h" "$uid")" || owner="" ;; esac
         done < <(enumerate_users)
         if [ "$matched" -eq 0 ]; then
             log_warn "terminal: log has no eligible user home: $item"
             FAILED_COUNT=$((FAILED_COUNT + 1)); continue
+        fi
+        if ! terminal_clients_stopped "$owner"; then
+            log_warn "terminal: close Terminal, iTerm2 and restoration servers before removing: $item"
+            if [ "$DRY_RUN" -eq 0 ]; then
+                FAILED_COUNT=$((FAILED_COUNT + 1)); continue
+            fi
         fi
         guard_mutation_target "$path" || continue
         if [ ! -f "$path" ]; then
@@ -4132,10 +4156,13 @@ module_terminal() {
 
 # --- module: finderhistory ---------------------------------------------------
 
+# finder_history_clients_stopped UID - Finder and Open/Save panels write only
+# their own account's preferences.
 finder_history_clients_stopped() {
     [ "$TEST_MODE" -eq 0 ] || return 0
     local processes
-    processes="$(process_list command)" || return 1
+    [ -n "${1:-}" ] || return 1
+    processes="$(process_list command "$1")" || return 1
     if printf '%s\n' "$processes" | grep -E '(^|[ /])(Finder|com\.apple\.appkit\.xpc\.openAndSavePanelService)([[:space:]/]|$)' >/dev/null; then
         return 1
     fi
@@ -4206,14 +4233,15 @@ finder_history_plist() {
 }
 
 module_finderhistory() {
-    local u h uid
-    if ! finder_history_clients_stopped; then
-        log_warn "finderhistory: quit Finder and close Open/Save dialogs before cleanup"
-        if [ "$DRY_RUN" -eq 0 ]; then
-            FAILED_COUNT=$((FAILED_COUNT + 1)); return 0
-        fi
-    fi
+    local u h uid owner
     while IFS=$'\t' read -r u h uid; do
+        owner="$(home_uid "$h" "$uid")" || owner=""
+        if ! finder_history_clients_stopped "$owner"; then
+            log_warn "finderhistory: quit Finder and close Open/Save dialogs of $u before cleanup"
+            if [ "$DRY_RUN" -eq 0 ]; then
+                FAILED_COUNT=$((FAILED_COUNT + 1)); continue
+            fi
+        fi
         finder_history_plist "$h/Library/Preferences/com.apple.finder.plist" finder
         finder_history_plist "$h/Library/Preferences/.GlobalPreferences.plist" panels
         finder_history_plist "$h/Library/Preferences/com.apple.appkit.xpc.openAndSavePanelService.plist" panels
@@ -4516,14 +4544,17 @@ module_spelling() {
 # System writers are not killed. An offline store is required: daemon restarts
 # can recreate data or hold stale Core Data state after direct SQLite cleanup.
 activity_store_idle() {
-    local db="$1" flavor="$2" processes pattern suffix
+    local db="$1" flavor="$2" processes pattern suffix owner
     [ "$TEST_MODE" -eq 0 ] && [ "$DRY_RUN" -eq 0 ] || return 0
     case "$flavor" in
         notifications) pattern='(usernoted|NotificationCenter)' ;;
         knowledge) pattern='(knowledge-agent|knowledgeconstructiond|coreduetd|duetexpertd)' ;;
         *) pattern='(intelligenceplatformd|knowledgeconstructiond|intelligencetasksd|BiomeAgent|biomed)' ;;
     esac
-    processes="$(process_list comm)" || return 1
+    # Per-account agents write only their owner's stores. Root-owned system
+    # stores keep the check across every account.
+    owner="$(trash_stat_number %u "$db")" || return 1
+    processes="$(process_list comm "$owner")" || return 1
     if printf '%s\n' "$processes" | grep -E "(^|/)${pattern}$" >/dev/null; then return 1; fi
     for suffix in '' -wal -shm -journal; do
         [ -e "$db$suffix" ] || continue

@@ -62,13 +62,13 @@ printf 'PASS: finder selection, exact candidate paths, preview and path refusal\
 # Only the process query is controlled, never a native user preference store.
 TEST_MODE=0
 ps() { return 2; }
-if finder_history_clients_stopped; then exit 1; fi
+if finder_history_clients_stopped 501; then exit 1; fi
 ps() { printf '/System/Library/CoreServices/Finder.app/Contents/MacOS/Finder\n'; }
-if finder_history_clients_stopped; then exit 1; fi
+if finder_history_clients_stopped 501; then exit 1; fi
 ps() { printf '/System/XPCServices/com.apple.appkit.xpc.openAndSavePanelService\n'; }
-if finder_history_clients_stopped; then exit 1; fi
+if finder_history_clients_stopped 501; then exit 1; fi
 ps() { printf '/bin/bash test\n'; }
-finder_history_clients_stopped
+finder_history_clients_stopped 501
 unset -f ps
 TEST_MODE=1
 printf 'PASS: finder and panel process guards and query failure\n'

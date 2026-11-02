@@ -370,7 +370,33 @@ STUB
     PATH="$bin:$PATH"
     export SHREDDER_TEST_SELF="$$"
     TEST_MODE=0
-    terminal_clients_stopped
+    terminal_clients_stopped 0
 )
 test_process_checks_ignore_own_run
 printf 'PASS: process checks ignore the run'"'"'s own command line\n'
+
+test_process_checks_scope_owner() (
+    setup_case owner-process
+    local bin="$WORK/owner-process-bin"
+    mkdir -p "$bin"
+    # Terminal and Finder run only in account 501.
+    cat > "$bin/ps" <<'STUB'
+#!/bin/sh
+case "$*" in
+    *'-axo pid=,ppid=,uid=,command='*)
+        printf '11 1 501 /System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal\n'
+        printf '12 1 501 /System/Library/CoreServices/Finder.app/Contents/MacOS/Finder\n' ;;
+    *'-o ppid= -p'*) printf '1\n' ;;
+esac
+STUB
+    chmod +x "$bin/ps"
+    PATH="$bin:$PATH"
+    TEST_MODE=0
+    terminal_clients_stopped 502
+    finder_history_clients_stopped 502
+    ! terminal_clients_stopped 501
+    ! finder_history_clients_stopped 501
+    ! terminal_clients_stopped ''
+)
+test_process_checks_scope_owner
+printf 'PASS: per-account client checks ignore other accounts\n'

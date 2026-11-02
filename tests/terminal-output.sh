@@ -63,12 +63,12 @@ printf 'PASS: terminal custom log boundaries and usage validation\n'
 # Process query failure, active app, helper and clean result.
 TEST_MODE=0
 ps() { return 2; }
-if terminal_clients_stopped; then exit 1; fi
+if terminal_clients_stopped 501; then exit 1; fi
 ps() { printf '/Applications/iTerm.app/Contents/MacOS/iTerm2\n'; }
-if terminal_clients_stopped; then exit 1; fi
+if terminal_clients_stopped 501; then exit 1; fi
 ps() { printf '/Applications/iTerm.app/Contents/MacOS/iTermServer-3.5.0\n'; }
-if terminal_clients_stopped; then exit 1; fi
+if terminal_clients_stopped 501; then exit 1; fi
 ps() { printf '/bin/bash test\n'; }
-terminal_clients_stopped
+terminal_clients_stopped 501
 unset -f ps
 printf 'PASS: terminal process and restoration server guards\n'

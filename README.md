@@ -409,8 +409,10 @@ can contain older event data; this is not a full KnowledgeC or cloud-history
 reset.
 
 These operations require closed stores and stopped writer services. The script
-checks process metadata and open database/sidecar files. It does not kill or
-restart services. Use an offline user session and keep services stopped until
+checks process metadata and open database/sidecar files. Per-account agents
+block only stores owned by their account; root-owned system stores, such as
+the system KnowledgeC database, are blocked by a writer in any account. It
+does not kill or restart services. Use an offline user session and keep services stopped until
 the run finishes. Unknown tables, missing required columns, triggers, views,
 linked files, active writers, and SQLite failures stop cleanup. SQLite handles
 the transaction, compaction, and WAL checkpoint; there is no database-removal
@@ -503,8 +505,11 @@ and [Slackdump](https://github.com/rusq/slackdump).
 Select `--modules terminal` to remove Apple Terminal and iTerm2 saved window
 state, including iTerm2 `~/Library/Application Support/iTerm2/SavedState`.
 This removes persisted scrollback and recovery state. Close Terminal, iTerm2
-and their restoration servers first. The module refuses writes if a client
-is running or the process query fails. It does not terminate sessions.
+and their restoration servers first. The check applies to each account
+separately: a client running in one account, or a failed process query,
+blocks that account's writes only. Run the module from a different account
+(for example over SSH) to clean the account you use. It does not terminate
+sessions.
 
 Session logs can be stored anywhere selected in the terminal profile. They
 are not discovered automatically. Use repeatable `--terminal-log-file` paths
@@ -535,7 +540,8 @@ and [session logging settings](https://iterm2.com/documentation-preferences-prof
 the service container under `~/Library/Containers/`.
 
 Quit Finder and close Open/Save dialogs before cleanup. A running Finder or
-panel service, or a failed process query, blocks writes. The module does not
+panel service in an account, or a failed process query, blocks writes for
+that account. Accounts without these processes are still cleaned. The module does not
 quit applications for you. Close other applications that may retain recent
 places in memory; they can write history again later.
 
