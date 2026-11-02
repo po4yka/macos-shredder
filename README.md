@@ -62,6 +62,7 @@ Dry-run and `--list` do not create logs.
 | `wifi` | Remembered Wi-Fi preference files and Wi-Fi logs |
 | `brew` | Homebrew caches and logs |
 | `apps` | Selected editor caches, logs, and saved terminal states |
+| `editors` | VS Code-family and JetBrains local history; Vim/Neovim persistent history |
 | `ai` | Local sessions for Claude Code, Codex, OpenCode, Cursor, Windsurf, Continue, Cline/Roo, and Aider |
 
 Mounted volumes are excluded by default. Use `--include-volumes` to include
@@ -79,6 +80,35 @@ the script does not change mount permissions. Disconnected volumes, custom
 mount points, and Trash for users without an eligible local home are outside
 this scope. The per-UID layout is also used by the
 [macOS trash utility](https://github.com/morgant/tools-osx/blob/master/src/trash).
+
+## Editor history
+
+Run `--modules editors --dry-run --debug` to inspect the targets. Close VS Code,
+VS Code Insiders, VSCodium, Cursor, Windsurf, JetBrains IDEs, Vim and Neovim
+before a real run. The module refuses cleanup if a supported editor is running
+or the process query fails. It does not stop processes. Keep editors closed
+until cleanup finishes.
+
+The module clears these standard locations in each eligible home:
+
+| Editor | Removed history |
+| --- | --- |
+| VS Code, Insiders, VSCodium, Cursor, Windsurf and Windsurf Next | `Library/Application Support/<app>/User/History`, shared by editor profiles |
+| JetBrains IDEs | `Library/Caches/JetBrains/<product><version>/LocalHistory` |
+| Vim | `.viminfo` |
+| Neovim | `.local/state/nvim/shada` and the legacy `.local/share/nvim/shada` |
+
+Settings, credentials, extensions, project files, Git history, unsaved editor
+`Backups`, swap files and persistent undo files remain. Vim/Neovim history
+cleanup also removes stored marks, registers and recent-file lists.
+Custom user-data directories, custom `idea.system.path`, `NVIM_APPNAME`, XDG or
+ShaDa path overrides, remote editor stores and third-party history extensions
+are outside this module's scope. Recent-file and search records in mixed editor
+settings databases are also retained.
+
+Storage references: [VS Code local-history path](https://github.com/microsoft/vscode/blob/main/src/vs/platform/environment/common/environmentService.ts),
+[JetBrains Local History](https://www.jetbrains.com/help/idea/local-history.html),
+[Neovim ShaDa](https://neovim.io/doc/user/starting.html#shada-file-name).
 
 ## AI sessions
 

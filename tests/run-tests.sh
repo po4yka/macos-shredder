@@ -4,7 +4,7 @@
 #
 # Phases:
 #   A  usage validation   unknown --modules value -> exit 64 + valid ids listed
-#   B  module listing     --list -> exit 0 + all 15 module ids present
+#   B  module listing     --list -> exit 0 + all 16 module ids present
 #   C  forced clean       artifacts -> --force --debug -> post-state verified
 #   D  dry-run safety     artifacts+manifest -> -n -f -> byte-identical state
 #   E  sandbox guard      unmarked SHREDDER_ROOT -> fatal refusal
@@ -37,7 +37,7 @@ VERIFY_CLEANUP="$SCRIPT_DIR/verify-cleanup.sh"
 
 readonly MODULE_IDS=(
   shell systemlogs audit browser unified fileevents usage spotlight
-  quicklook trash dsstore wifi brew apps ai
+  quicklook trash dsstore wifi brew apps editors ai
 )
 
 WORK=''
@@ -526,5 +526,6 @@ fi
 bash "$SCRIPT_DIR/regressions.sh"
 bash "$SCRIPT_DIR/ai-sessions.sh"
 bash "$SCRIPT_DIR/ai-editors.sh"
+bash "$SCRIPT_DIR/editor-history.sh"
 bash "$SCRIPT_DIR/volume-trash.sh"
 info 'all phases and regressions passed'

@@ -96,6 +96,7 @@ MODULE_IDS=(
     wifi
     brew
     apps
+    editors
     ai
 )
 MODULE_DESCS=(
@@ -113,6 +114,7 @@ MODULE_DESCS=(
     "Wi-Fi known networks and logs"
     "Homebrew caches and logs"
     "App caches and saved window states"
+    "Editor local history and Vim/Neovim state"
     "Local AI agent and editor sessions"
 )
 
@@ -1041,7 +1043,6 @@ module_shell() {
 .sqlite_history
 .rediscli_history
 .lesshst
-.viminfo
 .wget-hsts
 .node_repl_history
 .Rhistory
@@ -1691,6 +1692,60 @@ module_apps() {
         fi
         remove_path "$h/Library/Saved Application State/com.apple.Terminal.savedState"
         remove_path "$h/Library/Saved Application State/com.googlecode.iterm2.savedState"
+    done < <(enumerate_users)
+    return 0
+}
+
+# --- module: editors ---------------------------------------------------------
+
+# Query once before touching editor history. Do not log process arguments:
+# they can contain file names or credentials. Keep editors closed until done.
+editors_stopped() {
+    [ "$TEST_MODE" -eq 0 ] || return 0
+    local processes
+    if ! processes="$(ps -axo command= 2>/dev/null)"; then
+        log_warn "editors: cannot inspect running processes; cleanup refused"
+        return 1
+    fi
+    if printf '%s\n' "$processes" | grep -Ei '(^|[ /])(vi|vim|view|ex|rvim|rview|vimdiff|gvim|gvimdiff|mvim|nvim|nvim-qt|code|code-insiders|codium|cursor|windsurf)([[:space:]]|$)|/(Visual Studio Code[^/]*|Code - Insiders|VSCodium|Cursor|Windsurf[^/]*|IntelliJ IDEA[^/]*|PyCharm[^/]*|WebStorm[^/]*|GoLand[^/]*|CLion[^/]*|Rider[^/]*|PhpStorm[^/]*|RubyMine[^/]*|RustRover[^/]*|DataGrip[^/]*|DataSpell[^/]*|Aqua[^/]*|Android Studio[^/]*|MacVim)\.app/|(-Didea\.(paths\.selector|home\.path)=|com\.intellij\.idea\.Main)' >/dev/null; then
+        log_warn "editors: close supported editors and their background processes first"
+        return 1
+    fi
+    return 0
+}
+
+clean_editor_history_for_home() {
+    local h="$1" app root product
+    for app in Code 'Code - Insiders' VSCodium Cursor Windsurf 'Windsurf - Next'; do
+        # VS Code stores local history at appSettingsHome/History. This is
+        # shared by its profiles, rather than stored in each profile's settings.
+        clear_dir_contents "$h/Library/Application Support/$app/User/History"
+    done
+    root="$h/Library/Caches/JetBrains"
+    if guard_mutation_target "$root" && [ -d "$root" ]; then
+        while read_find_path product; do
+            clear_dir_contents "$product/LocalHistory"
+        done < <(find_checked "$root" -mindepth 1 -maxdepth 1 -type d -print0)
+    fi
+    # Only persistent command/search/file state. Swap files, undo files,
+    # backup buffers, configuration and plugin data remain in place.
+    remove_path "$h/.viminfo"
+    clear_dir_contents "$h/.local/state/nvim/shada"
+    clear_dir_contents "$h/.local/share/nvim/shada"
+    return 0
+}
+
+module_editors() {
+    local u h uid
+    if ! editors_stopped; then
+        if [ "$DRY_RUN" -eq 0 ]; then
+            FAILED_COUNT=$((FAILED_COUNT + 1))
+            return 0
+        fi
+    fi
+    while IFS=$'\t' read -r u h uid; do
+        [ -d "$h" ] || continue
+        clean_editor_history_for_home "$h"
     done < <(enumerate_users)
     return 0
 }
@@ -2358,6 +2413,7 @@ run_module() {
         wifi)        module_wifi ;;
         brew)        module_brew ;;
         apps)        module_apps ;;
+        editors)     module_editors ;;
         ai)          module_ai ;;
         *)
             log_warn "unknown module id in dispatch: $1"

@@ -12,6 +12,7 @@ Files:
 | `run-tests.sh`         | orchestrator — runs phases A–O, reports PASS/FAIL per phase |
 | `regressions.sh`       | additional cleanup, status, and logfile safety checks |
 | `ai-sessions.sh`       | AI session cleanup, database safety, and preservation checks |
+| `editor-history.sh` | Editor history, preservation, process and symlink guards |
 | `ai-editors.sh`        | Cursor/Windsurf/Continue/Cline/Roo/Aider cleanup and preservation |
 | `create-artifacts.sh`  | builds the deterministic sandbox fixture tree (+ manifest)  |
 | `verify-cleanup.sh`    | asserts post-cleaning state (`force`) or byte-stability (`dryrun`) |
@@ -92,7 +93,7 @@ Exit codes: `run-tests.sh` → `0` all phases passed, `1` any phase failed,
 
 - **A — usage validation**: `--modules bogus_definitely_invalid` must exit
   `64` and print valid module ids → strict exact-match CLI validation.
-- **B — module listing**: `--list` exits `0` and prints all 15 module ids.
+- **B — module listing**: `--list` exits `0` and prints all 16 module ids.
 - **C — forced clean**: after `--force --debug` against a fresh sandbox:
   - histories emptied/gone for both users → **space-in-username enumeration
     fix**;
@@ -192,3 +193,8 @@ a build artifact to debug failures. Example GitHub Actions step:
     name: tests-last-run
     path: tests-last-run/
 ```
+
+`editor-history.sh` checks VS Code-family local history (shared by profiles),
+JetBrains LocalHistory and Vim/Neovim state. It verifies byte-for-byte dry-run
+preservation, repeated cleanup, retained settings and unsaved buffers, process
+query failures, active editors, symlink boundaries and enumeration failures.
