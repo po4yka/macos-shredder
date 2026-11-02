@@ -384,7 +384,12 @@ run_target_command() {
     case "$owner_uid" in
         ''|*[!0-9]*) return 1 ;;
     esac
+    # A root-owned home is unexpected. Root's own /var/folders cache tree is
+    # normal; only root can write there, so it keeps the root context.
     if [ "$TEST_MODE" -eq 0 ] && [ "$owner_uid" -eq 0 ]; then
+        case "$target" in
+            "$VAR_FOLDERS"/*) "$@"; return $? ;;
+        esac
         log_warn "refusing root-owned user directory: $owner_root"
         return 1
     fi
@@ -2550,7 +2555,10 @@ module_quicklook() {
     done < <(enumerate_users)
     while read_find_path qc; do
         clear_dir_contents "$qc"
-    done < <(find_checked "$VAR_FOLDERS" -type d -name 'com.apple.QuickLook.thumbnailcache' -print0)
+    # Caches sit at <bucket>/<user>/C/. Do not walk the rest of the busy
+    # temporary tree, where vanishing files would report traversal failures.
+    done < <(find_checked "$VAR_FOLDERS" -mindepth 4 -maxdepth 4 -type d \
+        -path '*/C/com.apple.QuickLook.thumbnailcache' -print0)
     return 0
 }
 
@@ -4794,7 +4802,8 @@ module_notifications() {
     done < <(enumerate_users)
     while read_find_path nc; do
         activity_notification_directory "$nc/db2"
-    done < <(find_checked "$VAR_FOLDERS" -type d -name 'com.apple.notificationcenter' -print0)
+    done < <(find_checked "$VAR_FOLDERS" -mindepth 4 -maxdepth 4 -type d \
+        \( -path '*/0/com.apple.notificationcenter' -o -path '*/C/com.apple.notificationcenter' \) -print0)
 }
 
 module_activity() {

@@ -566,3 +566,18 @@ test_quarantine_purge() (
 )
 test_quarantine_purge
 printf 'PASS: quarantine events are deleted securely and counted once\n'
+
+test_var_folders_scan_depth() (
+    setup_case var-folders-depth
+    local cache="$VAR_FOLDERS/ab/cd/C/com.apple.QuickLook.thumbnailcache"
+    local nested="$VAR_FOLDERS/ab/cd/T/project/com.apple.QuickLook.thumbnailcache"
+    mkdir -p "$cache" "$nested"
+    printf 'thumb\n' > "$cache/thumb"
+    printf 'keep\n' > "$nested/thumb"
+    module_quicklook
+    [ ! -e "$cache/thumb" ]
+    # Only the cache location is selected, not the whole temporary tree.
+    [ -s "$nested/thumb" ]
+)
+test_var_folders_scan_depth
+printf 'PASS: /var/folders scans stay at the cache depth\n'
