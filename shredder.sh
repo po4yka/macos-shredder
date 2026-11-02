@@ -3819,9 +3819,13 @@ INSERT INTO names SELECT CASE WHEN json_type(value,'$.name')='text' THEN json_ex
 INSERT INTO valid SELECT COUNT(*)=0 FROM names WHERE name='' OR name IN ('.','..') OR substr(name,1,1)='.' OR instr(name,'/')>0 OR instr(name,char(92))>0 OR instr(name,char(0))>0 OR instr(name,char(9))>0 OR instr(name,char(10))>0 OR instr(name,char(13))>0;
 SELECT DISTINCT name FROM names;"
     elif [ "$kind" = users ]; then
-        sql="$sql INSERT INTO valid SELECT COUNT(*)=0 FROM metadata,json_each(doc) WHERE json_type(value,'$.id') IS NOT 'text';"
+        sql="$sql
+INSERT INTO valid SELECT COUNT(*)=0 FROM metadata,json_each(doc) WHERE json_type(value,'$.id') IS NOT 'text';"
     fi
-    run_target_command "$path" "$sqlite_bin" -batch -bail :memory: "$sql" 2>/dev/null
+    # Apple's CLI can run later statements of one argument or input line after
+    # an error, even with -bail. Each statement above is on its own line, so
+    # a failed check stops before the final SELECT prints any names.
+    printf '%s\n' "$sql" | run_target_command "$path" "$sqlite_bin" -batch -bail -init /dev/null :memory: 2>/dev/null
 }
 
 slack_export_plan_standard() {

@@ -620,3 +620,17 @@ test_aged_log_unknown_time() (
 )
 test_aged_log_unknown_time
 printf 'PASS: an unreadable log age is reported, not skipped silently\n'
+
+test_slack_json_stops_on_check() (
+    setup_case slack-json-check
+    local root="$USERS_DIR/alice/SlackExport" out
+    mkdir -p "$root"
+    printf '[{"name":"general"},{"name":"../escape"}]\n' > "$root/channels.json"
+    # Apple's sqlite3 continues after an error inside one argument.
+    if [ -x /usr/bin/sqlite3 ]; then PATH="/usr/bin:$PATH"; fi
+    out="$(slack_export_json "$root/channels.json" channels)" && return 1
+    # A failed name check must not print any names for the caller.
+    [ -z "$out" ]
+)
+test_slack_json_stops_on_check
+printf 'PASS: a failed Slack JSON check prints no channel names\n'
