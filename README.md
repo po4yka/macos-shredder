@@ -161,6 +161,7 @@ recording, and shell history can independently retain records of a run.
 | `siri` | Explicit; manual | Manual Siri/Dictation deletion instructions; real runs report incomplete |
 | `diagnosticexports` | Explicit paths | Completed selected sysdiagnose archives and native-validated log archives |
 | `devicebackups` | Explicit paths | Completed selected unencrypted MobileSync backups with validated manifests |
+| `testresults` | Explicit paths | Selected Xcode result bundles validated by installed xcresulttool |
 | `mailhistory` | Explicit; manual | Mail recipients and attachments; instructions only, real runs report incomplete |
 | `locationhistory` | Explicit; manual | Maps searches and significant locations; instructions only, real runs report incomplete |
 | `callhistory` | Explicit; manual | Phone and FaceTime call history; instructions only, real runs report incomplete |
@@ -991,6 +992,20 @@ This deletes a restore point, including device data and settings. It does not
 remove an iCloud backup. Use Finder's Manage Backups for unsupported formats.
 See [Apple's backup locations and management](https://support.apple.com/en-ie/108809)
 and the [MobileBackup2 implementation](https://github.com/libimobiledevice/libimobiledevice/blob/master/tools/idevicebackup2.c).
+
+### Selected Xcode test results
+
+`testresults --test-result PATH` selects one `.xcresult` bundle below an eligible
+user home. Repeat the option for more bundles. Xcode 16.3 or later must be installed
+and selected: `xcresulttool get content-availability` must accept the bundle.
+Missing tools and invalid or incomplete bundles cause a refusal. Close Xcode,
+`xcodebuild`, `xctest` and result viewers first. Symlinks, hard-linked files, open
+files and nested mounts are refused. `--dry-run` validates without deleting.
+
+This removes selected test results, logs and attachments. Source projects and
+`.xcarchive` distribution archives are not targets. See
+[Apple's xcresulttool command](https://developer.apple.com/documentation/xcode-release-notes/xcode-16_3-release-notes)
+and [test attachments](https://developer.apple.com/documentation/xctest/adding-attachments-to-tests-activities-and-issues).
 
 ### Selected document versions
 

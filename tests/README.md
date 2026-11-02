@@ -253,6 +253,10 @@ invalid formats, symlinks, hard links and process-query refusal in temporary fix
 manifest schema and dry-run with native plist and SQLite tools on macOS fixtures.
 Linux uses a plistlib adapter for the unavailable native plutil boundary.
 
+`test-results.sh` checks native rejection of an invalid bundle, exact selection,
+dry-run and `.xcarchive` retention. A tool-boundary double checks successful
+dispatch; acceptance of a real `.xcresult` remains a separate native check.
+
 ### Document versions
 
 `bash tests/document-versions.sh` verifies explicit selection, path guards,

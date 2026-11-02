@@ -77,6 +77,7 @@ METADATA_FILES=()
 VERSION_FILES=()
 SPELLING_WORDS=()
 AI_ROOTS=()
+TEST_RESULTS=()
 DEVICE_BACKUPS=()
 DIAGNOSTIC_EXPORTS=()
 AI_CLAUDE_TMP_BASE=/private/tmp
@@ -133,6 +134,7 @@ MODULE_IDS=(
     siri
     diagnosticexports
     devicebackups
+    testresults
     mailhistory
     locationhistory
     callhistory
@@ -171,6 +173,7 @@ MODULE_DESCS=(
     "Siri and Dictation deletion instructions (manual action required)"
     "Selected completed diagnostic exports"
     "Selected completed unencrypted device backups"
+    "Selected Xcode test result bundles"
     "Mail recipients and attachments (manual action required)"
     "Maps searches and significant locations (manual action required)"
     "Phone and FaceTime call history (manual action required)"
@@ -775,6 +778,9 @@ Options:
       --device-backup PATH
                         Selected completed unencrypted device backups.
                         Requires devicebackups; repeat for more paths.
+      --test-result PATH
+                        Selected Xcode test result bundles.
+                        Requires testresults; repeat for more paths.
       --version-file PATH
                         Remove previous versions of one local file; retain its contents.
                         Requires --modules documentversions; repeat for more files.
@@ -961,6 +967,10 @@ parse_args() {
                 [ $# -ge 2 ] || usage_error "--device-backup requires a path"
                 add_selected_artifact devicebackups "$2"; shift 2 ;;
             --device-backup=*) add_selected_artifact devicebackups "${1#*=}"; shift ;;
+            --test-result)
+                [ $# -ge 2 ] || usage_error "--test-result requires a path"
+                add_selected_artifact testresults "$2"; shift 2 ;;
+            --test-result=*) add_selected_artifact testresults "${1#*=}"; shift ;;
             --version-file)
                 [ $# -ge 2 ] || usage_error "--version-file requires a file"
                 add_version_file "$2"; shift 2
@@ -1010,6 +1020,7 @@ parse_args() {
     fi
     validate_selected_artifact_options diagnosticexports diagnostic-export "${#DIAGNOSTIC_EXPORTS[@]}"
     validate_selected_artifact_options devicebackups device-backup "${#DEVICE_BACKUPS[@]}"
+    validate_selected_artifact_options testresults test-result "${#TEST_RESULTS[@]}"
     if module_selected documentversions; then
         [ "${#VERSION_FILES[@]}" -gt 0 ] || usage_error "documentversions requires --version-file"
     elif [ "${#VERSION_FILES[@]}" -gt 0 ]; then
@@ -3735,6 +3746,7 @@ add_selected_artifact() {
     case "$user" in ''|Shared|Guest|.*) usage_error "ineligible artifact home" ;; esac
     case "$kind" in
         diagnosticexports) DIAGNOSTIC_EXPORTS+=("$path") ;;
+        testresults) TEST_RESULTS+=("$path") ;;
         devicebackups) DEVICE_BACKUPS+=("$path") ;;
     esac
 }
@@ -3874,6 +3886,29 @@ module_devicebackups() {
             selected_remove_path "$target"
         else
             selected_artifact_refuse devicebackups "$target"
+        fi
+    done
+}
+
+test_result_valid() {
+    local target="$1"
+    case "${target##*/}" in *.xcresult) ;; *) return 1 ;; esac
+    [ -d "$target" ] && [ -f "$target/Info.plist" ] && [ -d "$target/Data" ] || return 1
+    # Xcode 16.3+ provides this read-only inspection. Unsupported toolchains
+    # fail closed; do not infer a result bundle from a directory suffix alone.
+    run_target_command "$target" /usr/bin/xcrun xcresulttool get content-availability --path "$target" --compact >/dev/null 2>&1
+}
+
+module_testresults() {
+    local requested target
+    for requested in ${TEST_RESULTS[@]+"${TEST_RESULTS[@]}"}; do
+        target="$SANDBOX$requested"
+        if selected_artifact_safe "$target" &&
+            selected_artifact_idle "$target" '(^|/)(Xcode|xcodebuild|xctest|xcresulttool)$' &&
+            test_result_valid "$target" && selected_artifact_safe "$target"; then
+            selected_remove_path "$target"
+        else
+            selected_artifact_refuse testresults "$target"
         fi
     done
 }
@@ -4549,7 +4584,7 @@ module_alfred() {
 
 module_selected() {
     if [ -z "$SELECTED_MODULES" ]; then
-        case "$1" in fsevents|clipboard|headless|slackexport|terminal|finderhistory|filemetadata|documentversions|spelling|notifications|activity|siri|mailhistory|locationhistory|callhistory|messagehistory|photometadata|alfred|devicebackups|diagnosticexports) return 1 ;; *) return 0 ;; esac
+        case "$1" in fsevents|clipboard|headless|slackexport|terminal|finderhistory|filemetadata|documentversions|spelling|notifications|activity|siri|mailhistory|locationhistory|callhistory|messagehistory|photometadata|alfred|devicebackups|testresults|diagnosticexports) return 1 ;; *) return 0 ;; esac
     fi
     case ",$SELECTED_MODULES," in
         *",$1,"*) return 0 ;;
@@ -4588,6 +4623,7 @@ run_module() {
         activity)    module_activity ;;
         siri)        module_siri ;;
         diagnosticexports) module_diagnosticexports ;;
+        testresults) module_testresults ;;
         devicebackups) module_devicebackups ;;
         mailhistory) module_mailhistory ;;
         locationhistory) module_locationhistory ;;
