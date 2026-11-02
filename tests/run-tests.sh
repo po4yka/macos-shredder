@@ -40,7 +40,7 @@ VERIFY_CLEANUP="$SCRIPT_DIR/verify-cleanup.sh"
 
 readonly MODULE_IDS=(
   shell systemlogs audit browser unified fileevents fsevents usage spotlight
-  quicklook trash dsstore wifi brew apps editors ai clipboard headless slackexport terminal finderhistory filemetadata documentversions notifications activity siri mailhistory
+  quicklook trash dsstore wifi brew apps editors ai clipboard headless slackexport terminal finderhistory filemetadata documentversions notifications activity siri mailhistory locationhistory
 )
 
 WORK=''

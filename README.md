@@ -158,6 +158,7 @@ recording, and shell history can independently retain records of a run.
 | `activity` | Explicit | Known KnowledgeC and IntelligencePlatform event/feedback tables; reports unsupported stores |
 | `siri` | Explicit; manual | Manual Siri/Dictation deletion instructions; real runs report incomplete |
 | `mailhistory` | Explicit; manual | Mail recipients and attachments; instructions only, real runs report incomplete |
+| `locationhistory` | Explicit; manual | Maps searches and significant locations; instructions only, real runs report incomplete |
 
 Mounted volumes are excluded by default. Use `--include-volumes` to include
 their FSEvents, `.DS_Store` data, and per-user Trash in the corresponding
@@ -531,6 +532,18 @@ and the native `xattr(1)` manual for the attribute and tool behavior.
 A real run reports exit `2` and does not add cleaned items. A dry-run prints
 the guidance and normally returns `0`. The script does not open apps, click
 buttons, change permissions, or mutate these stores. [Official instructions](https://support.apple.com/guide/mail/remove-obsolete-email-addresses-mlhlp1113/mac).
+
+### Maps searches and significant locations
+
+`locationhistory` is an explicit manual workflow. Maps recent searches and Significant Locations are separate stores. Use the app and Location Services controls; clearing one does not establish that the other was cleared. Saved places and service settings are not changed by this module.
+
+```sh
+./shredder.sh --modules locationhistory --dry-run
+```
+
+A real run reports exit `2` and does not add cleaned items. A dry-run prints
+the guidance and normally returns `0`. The script does not open apps, click
+buttons, change permissions, or mutate these stores. [Official instructions](https://support.apple.com/en-gb/guide/mac-help/mh35873/27/mac/27).
 
 ## Browser site data and tab recovery
 

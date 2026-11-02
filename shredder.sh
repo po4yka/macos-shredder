@@ -128,6 +128,7 @@ MODULE_IDS=(
     activity
     siri
     mailhistory
+    locationhistory
 )
 MODULE_DESCS=(
     "Shell and REPL histories, session data"
@@ -158,6 +159,7 @@ MODULE_DESCS=(
     "Known activity stores; reports unsupported stores (explicit only)"
     "Siri and Dictation deletion instructions (manual action required)"
     "Mail recipients and attachments (manual action required)"
+    "Maps searches and significant locations (manual action required)"
 )
 
 # Color codes; filled by setup_colors(), left empty when colors are disabled.
@@ -4206,9 +4208,22 @@ module_mailhistory() {
     return 0
 }
 
+
+# Explicit guidance: no verified automatic backend for this private store.
+module_locationhistory() {
+    log_warn 'locationhistory: manual action required; no automatic cleanup was performed.'
+    log_warn 'locationhistory: Maps > Recents > Clear Recents removes recent searches and directions.'
+    log_warn 'locationhistory: System Settings > Privacy & Security > Location Services > System Services > Details > Significant Locations: use Details and Clear History. Labels can vary by macOS version.'
+    log_warn 'locationhistory: Location history can span devices signed in to the same Apple Account. Check the account scope in the confirmation dialog.'
+    log_warn 'locationhistory: No location database, saved place, account or Location Services setting was changed.'
+    log_info 'locationhistory: official instructions: https://support.apple.com/en-gb/guide/mac-help/mh35873/27/mac/27'
+    [ "$DRY_RUN" -eq 1 ] || FAILED_COUNT=$((FAILED_COUNT + 1))
+    return 0
+}
+
 module_selected() {
     if [ -z "$SELECTED_MODULES" ]; then
-        case "$1" in fsevents|clipboard|headless|slackexport|terminal|finderhistory|filemetadata|documentversions|notifications|activity|siri|mailhistory) return 1 ;; *) return 0 ;; esac
+        case "$1" in fsevents|clipboard|headless|slackexport|terminal|finderhistory|filemetadata|documentversions|notifications|activity|siri|mailhistory|locationhistory) return 1 ;; *) return 0 ;; esac
     fi
     case ",$SELECTED_MODULES," in
         *",$1,"*) return 0 ;;
@@ -4246,6 +4261,7 @@ run_module() {
         activity)    module_activity ;;
         siri)        module_siri ;;
         mailhistory) module_mailhistory ;;
+        locationhistory) module_locationhistory ;;
         *)
             log_warn "unknown module id in dispatch: $1"
             ;;

@@ -11,7 +11,7 @@ mkdir -p "$SHREDDER_ROOT/Users/Test/Library"
 : > "$SHREDDER_ROOT/.macos-shredder-test-root"
 printf 'private sentinel\n' > "$SHREDDER_ROOT/Users/Test/Library/data"
 cp -R "$SHREDDER_ROOT" "$WORK/before"
-MODULES=(mailhistory)
+MODULES=(mailhistory locationhistory)
 for module in "${MODULES[@]}"; do
     for mode in real preview; do
         rc=0; args=(--force --debug --modules "$module")
