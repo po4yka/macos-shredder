@@ -316,24 +316,33 @@ run_target_command() {
 # the relative rm operand to a different parent. Run this after dropping privileges.
 remove_cache_entry() {
     local target="$1"
+    local remove_flags="${2:--rf}"
     # shellcheck disable=SC2016 # variables expand in the owner-UID child shell
     run_target_command "$target" /bin/sh -c '
         parent=${1%/*}
         entry=${1##*/}
         cd -P "$parent" || exit 1
         [ "$(pwd -P)" = "$parent" ] || exit 1
-        exec /bin/rm -rf -- "./$entry"
-    ' sh "$target"
+        exec /bin/rm "$2" -- "./$entry"
+    ' sh "$target" "$remove_flags"
 }
 
 # remove_path PATH - recursively delete a file/dir/symlink after an
 # existence check. Broken symlinks are handled via the -L test.
 remove_path() {
     local target="$1"
+    local remove_flags=-rf
     if [ -z "$target" ]; then
         return 0
     fi
-    guard_mutation_target "$target" || return 0
+    if [ -L "$target" ]; then
+        # Unlink the final component without following it. Its parents must
+        # still pass the guard; -f also refuses a raced replacement directory.
+        guard_mutation_target "${target%/*}" || return 0
+        remove_flags=-f
+    else
+        guard_mutation_target "$target" || return 0
+    fi
     if [ ! -e "$target" ] && [ ! -L "$target" ]; then
         log_debug "not present, skipping: $target"
         return 0
@@ -345,8 +354,8 @@ remove_path() {
     fi
     local result=0
     case "$target" in
-        "$VAR_FOLDERS"/*) remove_cache_entry "$target" 2>/dev/null || result=$? ;;
-        *) run_target_command "$target" /bin/rm -rf -- "$target" 2>/dev/null || result=$? ;;
+        "$VAR_FOLDERS"/*) remove_cache_entry "$target" "$remove_flags" 2>/dev/null || result=$? ;;
+        *) run_target_command "$target" /bin/rm "$remove_flags" -- "$target" 2>/dev/null || result=$? ;;
     esac
     if [ "$result" -eq 0 ]; then
         log_debug "removed: $target"

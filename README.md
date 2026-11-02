@@ -70,7 +70,8 @@ want to delete local Time Machine snapshots.
 - Exit `130`: interrupted by the user.
 
 The summary counts only operations that succeeded or would run. Unsafe paths
-with user-controlled symlink components are refused. Filesystem and SQLite
+with user-controlled symlink parents are refused. A final symlink can be
+removed without following its target. Filesystem and SQLite
 mutations inside each home run with that home's owner privileges, not as root.
 The same rule applies to per-user caches under `/private/var/folders`.
 Cache deletion checks the physical parent path and uses a relative target from

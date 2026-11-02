@@ -199,3 +199,27 @@ test_running_browser_status() (
 )
 test_running_browser_status
 printf 'PASS: skipped active browsers return exit 2 without deleting their data\n'
+
+test_trash_links() (
+    setup_case trash-links
+    local trash="$USERS_DIR/alice/.Trash" outside="$WORK/trash-outside" rc=0
+    mkdir -p "$trash" "$outside/dir"
+    printf 'keep\n' > "$outside/file"
+    printf 'keep\n' > "$outside/dir/file"
+    ln -s "$outside/file" "$trash/file-link"
+    ln -s "$outside/dir" "$trash/dir-link"
+    ln -s "$outside/missing" "$trash/broken-link"
+    /bin/bash "$SHREDDER" --dry-run --modules trash >/dev/null 2>&1
+    [ -L "$trash/broken-link" ]
+    /bin/bash "$SHREDDER" --force --modules trash >/dev/null 2>&1
+    [ -z "$(find "$trash" -mindepth 1 -print)" ]
+    grep -q '^keep$' "$outside/file"
+    grep -q '^keep$' "$outside/dir/file"
+    rmdir "$trash"
+    ln -s "$outside" "$trash"
+    /bin/bash "$SHREDDER" --force --modules trash > "$WORK/trash-parent.log" 2>&1 || rc=$?
+    [ "$rc" -eq 2 ]
+    grep -q '^keep$' "$outside/file"
+)
+test_trash_links
+printf 'PASS: Trash links are unlinked; targets and linked parents are protected\n'
