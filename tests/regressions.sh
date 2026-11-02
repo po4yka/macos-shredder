@@ -436,3 +436,24 @@ test_fda_probe_lists_directory() (
 )
 test_fda_probe_lists_directory
 printf 'PASS: the Full Disk Access probe reads directory entries\n'
+
+test_ai_link_scope() (
+    setup_case ai-link-scope
+    local h="$USERS_DIR/alice" outside="$WORK/ai-link-outside"
+    mkdir -p "$h/.claude" "$h/.gemini" "$h/.serena/logs" "$outside/projects/p" "$outside/tmp/p/chats"
+    printf 'keep\n' > "$outside/projects/p/session.jsonl"
+    printf 'keep\n' > "$outside/tmp/p/chats/chat.json"
+    ln -s "$outside/projects" "$h/.claude/projects"
+    ln -s "$outside/tmp" "$h/.gemini/tmp"
+    printf 'trace\n' > "$h/.claude/history.jsonl"
+    printf 'trace\n' > "$h/.serena/logs/server.log"
+    local rc=0
+    /bin/bash "$SHREDDER" --force --ai-extended --modules ai > "$WORK/ai-link.log" 2>&1 || rc=$?
+    [ "$rc" -eq 2 ]
+    [ ! -e "$h/.claude/history.jsonl" ]
+    [ ! -e "$h/.serena/logs/server.log" ]
+    [ -s "$outside/projects/p/session.jsonl" ]
+    [ -s "$outside/tmp/p/chats/chat.json" ]
+)
+test_ai_link_scope
+printf 'PASS: a refused AI store link skips only that store\n'

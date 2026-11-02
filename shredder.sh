@@ -3300,19 +3300,21 @@ ai_clean_root() {
             fi
             ;;
         claude)
-            guard_mutation_target "$root/projects" || return 0
-            while read_find_path project; do
-                guard_mutation_target "$project" || continue
-                [ -d "$project" ] || continue
-                while read_find_path entry; do
-                    case "${entry##*/}" in
-                        memory) [ "$AI_DERIVED" -eq 1 ] || continue ;;
-                        *.jsonl|*.jsonl.*|sessions-index.json|????????-????-????-????-????????????) ;;
-                        *) continue ;;
-                    esac
-                    remove_path "$entry"
-                done < <(find_checked "$project" -mindepth 1 -maxdepth 1 -print0)
-            done < <(find_checked "$root/projects" -mindepth 1 -maxdepth 1 -print0)
+            # A refused projects link must not skip the other Claude stores.
+            if guard_mutation_target "$root/projects"; then
+                while read_find_path project; do
+                    guard_mutation_target "$project" || continue
+                    [ -d "$project" ] || continue
+                    while read_find_path entry; do
+                        case "${entry##*/}" in
+                            memory) [ "$AI_DERIVED" -eq 1 ] || continue ;;
+                            *.jsonl|*.jsonl.*|sessions-index.json|????????-????-????-????-????????????) ;;
+                            *) continue ;;
+                        esac
+                        remove_path "$entry"
+                    done < <(find_checked "$project" -mindepth 1 -maxdepth 1 -print0)
+                done < <(find_checked "$root/projects" -mindepth 1 -maxdepth 1 -print0)
+            fi
             ai_remove_list "$root" history.jsonl file-history debug logs paste-cache image-cache uploads \
                 session-env shell-snapshots tasks teams sessions transcripts feedback-bundles stats-cache.json jobs
             ai_clean_json "$root/.claude.json" claude
@@ -3533,13 +3535,15 @@ ai_extended_home() {
     local h="$1" root project entry account org name
     # Gemini leaves binaries and project metadata beside its conversation
     # directories. Only known conversation/checkpoint paths are selected.
+    # Each store has its own guard: a refused link skips only that store.
     root="$h/.gemini/tmp"
-    guard_mutation_target "$root" || return 0
-    while read_find_path project; do
-        guard_mutation_target "$project" || continue
-        [ -d "$project" ] || continue
-        ai_remove_list "$project" chats checkpoints logs.json
-    done < <(find_checked "$root" -mindepth 1 -maxdepth 1 -print0)
+    if guard_mutation_target "$root"; then
+        while read_find_path project; do
+            guard_mutation_target "$project" || continue
+            [ -d "$project" ] || continue
+            ai_remove_list "$project" chats checkpoints logs.json
+        done < <(find_checked "$root" -mindepth 1 -maxdepth 1 -print0)
+    fi
     if [ "$AI_DERIVED" -eq 1 ]; then
         # This is Gemini's dedicated shadow Git store, not project Git data.
         remove_path "$h/.gemini/history"
@@ -3548,38 +3552,40 @@ ai_extended_home() {
         ai_extended_antigravity "$h/.gemini/$name"
     done
     root="$h/Library/Application Support/com.openai.chat"
-    guard_mutation_target "$root" || return 0
-    while read_find_path entry; do
-        name="${entry##*/}"
-        if printf '%s\n' "$name" | grep -E '^(conversations|drafts)-v[0-9]+-.+$' >/dev/null; then
-            guard_mutation_target "$entry" || continue
-            [ ! -d "$entry" ] || remove_path "$entry"
-        fi
-    done < <(find_checked "$root" -mindepth 1 -maxdepth 1 -print0)
+    if guard_mutation_target "$root"; then
+        while read_find_path entry; do
+            name="${entry##*/}"
+            if printf '%s\n' "$name" | grep -E '^(conversations|drafts)-v[0-9]+-.+$' >/dev/null; then
+                guard_mutation_target "$entry" || continue
+                [ ! -d "$entry" ] || remove_path "$entry"
+            fi
+        done < <(find_checked "$root" -mindepth 1 -maxdepth 1 -print0)
+    fi
     # The desktop parent also contains plugins, schedules and preferences.
     # Session directories alone are disposable; account/org directories remain.
     root="$h/Library/Application Support/Claude/local-agent-mode-sessions"
-    guard_mutation_target "$root" || return 0
-    while read_find_path account; do
-        name="${account##*/}"
-        printf '%s\n' "$name" | grep -E '^[[:xdigit:]]{8}(-[[:xdigit:]]{4}){3}-[[:xdigit:]]{12}$' >/dev/null || continue
-        guard_mutation_target "$account" || continue
-        while read_find_path org; do
-            name="${org##*/}"
+    if guard_mutation_target "$root"; then
+        while read_find_path account; do
+            name="${account##*/}"
             printf '%s\n' "$name" | grep -E '^[[:xdigit:]]{8}(-[[:xdigit:]]{4}){3}-[[:xdigit:]]{12}$' >/dev/null || continue
-            guard_mutation_target "$org" || continue
-            while read_find_path entry; do
-                name="${entry##*/}"
-                if printf '%s\n' "$name" | grep -E '^local_[[:xdigit:]]{8}(-[[:xdigit:]]{4}){3}-[[:xdigit:]]{12}$' >/dev/null; then
-                    guard_mutation_target "$entry" || continue
-                    remove_path "$entry"
-                fi
-            done < <(find_checked "$org" -mindepth 1 -maxdepth 1 -print0)
-            ai_clean_json "$org/.claude.json" claude
-            while read_find_path entry; do ai_clean_json "$entry" claude; done < <(
-                find_checked "$org" -mindepth 1 -maxdepth 1 -name '.claude.json.backup*' -print0)
-        done < <(find_checked "$account" -mindepth 1 -maxdepth 1 -type d -print0)
-    done < <(find_checked "$root" -mindepth 1 -maxdepth 1 -type d -print0)
+            guard_mutation_target "$account" || continue
+            while read_find_path org; do
+                name="${org##*/}"
+                printf '%s\n' "$name" | grep -E '^[[:xdigit:]]{8}(-[[:xdigit:]]{4}){3}-[[:xdigit:]]{12}$' >/dev/null || continue
+                guard_mutation_target "$org" || continue
+                while read_find_path entry; do
+                    name="${entry##*/}"
+                    if printf '%s\n' "$name" | grep -E '^local_[[:xdigit:]]{8}(-[[:xdigit:]]{4}){3}-[[:xdigit:]]{12}$' >/dev/null; then
+                        guard_mutation_target "$entry" || continue
+                        remove_path "$entry"
+                    fi
+                done < <(find_checked "$org" -mindepth 1 -maxdepth 1 -print0)
+                ai_clean_json "$org/.claude.json" claude
+                while read_find_path entry; do ai_clean_json "$entry" claude; done < <(
+                    find_checked "$org" -mindepth 1 -maxdepth 1 -name '.claude.json.backup*' -print0)
+            done < <(find_checked "$account" -mindepth 1 -maxdepth 1 -type d -print0)
+        done < <(find_checked "$root" -mindepth 1 -maxdepth 1 -type d -print0)
+    fi
     ai_extended_context "$h/.claude/context-mode"
     clear_dir_contents "$h/.serena/logs"
 }
