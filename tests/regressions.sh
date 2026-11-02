@@ -322,7 +322,7 @@ test_dsstore_volume_alias() (
     /bin/bash "$SHREDDER" --force --include-volumes --modules dsstore \
         > "$WORK/dsstore-alias.log" 2>&1 || rc=$?
     [ "$rc" -eq 0 ]
-    ! grep -q 'refusing' "$WORK/dsstore-alias.log"
+    if grep -q 'refusing' "$WORK/dsstore-alias.log"; then return 1; fi
     [ ! -e "$USERS_DIR/alice/Documents/.DS_Store" ]
     [ ! -e "$SANDBOX/Volumes/BACKUP/.DS_Store" ]
     [ -s "$SANDBOX/Library/.DS_Store" ]
@@ -394,9 +394,9 @@ STUB
     TEST_MODE=0
     terminal_clients_stopped 502
     finder_history_clients_stopped 502
-    ! terminal_clients_stopped 501
-    ! finder_history_clients_stopped 501
-    ! terminal_clients_stopped ''
+    if terminal_clients_stopped 501; then return 1; fi
+    if finder_history_clients_stopped 501; then return 1; fi
+    if terminal_clients_stopped ''; then return 1; fi
 )
 test_process_checks_scope_owner
 printf 'PASS: per-account client checks ignore other accounts\n'
