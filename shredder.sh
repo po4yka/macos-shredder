@@ -4669,8 +4669,15 @@ spelling_native() {
     [ "$(/usr/bin/stat -f '%u' /dev/console)" = "$uid" ] || return 1
     [ "$(/usr/bin/stat -f '%u' "$home")" = "$uid" ] || return 1
     /bin/launchctl print "gui/$uid" >/dev/null 2>&1 || return 1
-    /bin/launchctl asuser "$uid" /usr/bin/sudo -u "#$uid" -- \
-        /usr/bin/env HOME="$home" /usr/bin/osascript -l JavaScript - "$word" "$dry_run" <<'JXA'
+    local runner
+    # A dry-run does not need root. The console user can query its own
+    # session directly; root must enter that session first.
+    if [ "$(/usr/bin/id -u)" = "$uid" ]; then
+        runner=(/usr/bin/env HOME="$home")
+    else
+        runner=(/bin/launchctl asuser "$uid" /usr/bin/sudo -u "#$uid" -- /usr/bin/env HOME="$home")
+    fi
+    "${runner[@]}" /usr/bin/osascript -l JavaScript - "$word" "$dry_run" <<'JXA'
 ObjC.import('AppKit');
 function run(argv) {
     const checker = $.NSSpellChecker.sharedSpellChecker;
