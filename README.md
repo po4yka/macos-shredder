@@ -278,6 +278,22 @@ See also [terminal output](#terminal-saved-output-and-log-files),
 [notification/activity stores](#notification-and-activity-history), and
 [Siri instructions](#siri-and-dictation).
 
+### Print history: automatic cleanup is not supported
+
+The script does not remove CUPS job history or spool files. Apple's
+[CUPS scheduler](https://github.com/apple/cups/blob/master/scheduler/ipp.c)
+can purge a completed job with `Cancel-Job` and `purge-job=true`, but the same
+operation also cancels an active job. It has no required-state precondition.
+`Purge-Jobs` has the same limitation. A prior completed-state check is not
+sufficient: [CUPS can restart a completed job](https://apple.github.io/cups/doc/man-lp.html)
+between that check and the purge request while its document is retained.
+
+Automatic cleanup therefore cannot guarantee that pending or active jobs remain
+intact. The script does not use bulk cancellation, remove `/var/spool/cups`, or
+change scheduler permissions or retention settings. History in printer hardware
+and remote print servers is also outside its scope. This is an unsupported
+cleanup target, not a completed cleanup operation.
+
 ### Alfred clipboard history
 
 `alfred` prints the supported manual action: open Alfred, type `clear`, and
