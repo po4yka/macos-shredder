@@ -29,4 +29,18 @@ module_aiexports; [ -f "$target" ]; [ "$FAILED_COUNT" -eq 3 ]
 printf 'opaque encrypted export\n' > "$USERS_DIR/Alice/keep.rayconfig"
 AI_EXPORTS=(/Users/Alice/keep.rayconfig)
 module_aiexports; [ -f "$USERS_DIR/Alice/keep.rayconfig" ]; [ "$FAILED_COUNT" -eq 4 ]
+# Bash 3.2 must preserve literal backslashes while doubling SQL quotes.
+requested="/Users/Alice/Report's \\folder/Apple_Intelligence_Report.json"
+target="$SANDBOX$requested"
+mkdir -p "${target%/*}"
+printf '{"modelRequests":[],"privateCloudComputeRequests":[]}\n' > "$target"
+AI_EXPORTS=("$requested")
+DRY_RUN=1; module_aiexports
+[ -f "$target" ]; [ "$FAILED_COUNT" -eq 4 ]
+DRY_RUN=0; module_aiexports
+[ ! -e "$target" ]; [ "$FAILED_COUNT" -eq 4 ]
+# Control-character paths are rejected by CLI parsing, before validation.
+for bad in $'/Users/Alice/line\nfeed/Apple_Intelligence_Report.json' $'/Users/Alice/tab\tname/Apple_Intelligence_Report.json'; do
+    if (add_selected_artifact aiexports "$bad") >/dev/null 2>&1; then exit 1; fi
+done
 printf 'PASS: AI report identity, JSON structure, dry-run and opaque export retention\n'

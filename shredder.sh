@@ -3932,8 +3932,8 @@ ai_export_valid() {
     # Apple documents these two top-level arrays. SQLite JSON functions parse
     # the selected JSON as data in memory; no report contents enter the output.
     # An opaque Raycast .rayconfig file has no supported public validator here.
-    local escaped sql
-    escaped="${target//\'/\'\'}"
+    local escaped sql quote="'"
+    escaped="${target//$quote/$quote$quote}"
     sql="SELECT CASE WHEN json_valid(readfile('$escaped')) THEN
         json_type(readfile('$escaped')) = 'object' AND
         json_type(readfile('$escaped'), '$.modelRequests') = 'array' AND
