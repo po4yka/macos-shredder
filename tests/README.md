@@ -14,6 +14,7 @@ Files:
 | `ai-sessions.sh`       | AI session cleanup, database safety, and preservation checks |
 | `editor-history.sh` | Editor history, preservation, process and symlink guards |
 | `ai-editors.sh`        | Cursor/Windsurf/Continue/Cline/Roo/Aider cleanup and preservation |
+| `browser-stores.sh`    | Site storage, tab recovery, extension preservation, and opt-in cleanup |
 | `create-artifacts.sh`  | builds the deterministic sandbox fixture tree (+ manifest)  |
 | `verify-cleanup.sh`    | asserts post-cleaning state (`force`) or byte-stability (`dryrun`) |
 | `README.md`            | this document                                               |
@@ -153,6 +154,8 @@ catalogs, and a live WAL writer. It checks dry-run byte stability, successful
 cleanup, preserved settings and credentials, optional memory cleanup, custom
 roots, repeat runs, multiple users, corrupt/unsupported schemas, database locks,
 missing SQLite, symlinks, hard links, JSON errors, and Claude scratchpads.
+A failed-statement test uses the selected and native SQLite binaries to prove
+that a failed CHECK prevents later DELETE and COMMIT statements.
 Process detection is tested with controlled command listings; no host agent
 is stopped and no host session store is changed.
 
@@ -162,6 +165,11 @@ workspace databases, backups, binary secret values, nested settings, unchanged
 approval flags, Cascade settings, extension configuration, Aider source/Git
 preservation, dry-run stability, and repeat cleanup. Unknown schemas, malformed
 extension state, symlinked stores, WAL links, and recovery copies must fail closed.
+
+`browser-stores.sh` checks eight groups: Chromium profiles and mixed-store opt-in,
+Firefox origins and legacy SQLite, Safari stores and retained synced tabs,
+unknown schemas/symlink safety, active-browser/process-query failures, the macOS Brave process name, Safari cache-only roots, and pinned WAL readers.
+Passwords, bookmarks, extension state, dry-run bytes, and repeat runs are checked.
 
 - bash 3.2+ (no bash-4-only features used)
 - POSIX-ish userland: `find sort sed awk grep wc stat cp mv rm mkdir` — BSD or

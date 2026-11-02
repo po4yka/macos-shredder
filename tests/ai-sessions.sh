@@ -357,3 +357,23 @@ test_environment_roots() (
 )
 test_environment_roots
 printf 'PASS: environment overrides resolve paths and are ignored in sandbox mode\n'
+
+test_statement_failure_rollback() (
+    setup statement_failure
+    local db="$AI_HOME/transaction.db" sqlite_bin selected
+    selected="$(command -v sqlite3)"
+    # Test the native macOS CLI as well when PATH selects a different build.
+    for sqlite_bin in "$selected" /usr/bin/sqlite3; do
+        [ -x "$sqlite_bin" ] || continue
+        rm -f "$db"
+        "$sqlite_bin" "$db" 'CREATE TABLE preserved(value TEXT); INSERT INTO preserved VALUES("keep");'
+        if ai_sqlite_command "$db" "$sqlite_bin" 'BEGIN IMMEDIATE; CREATE TEMP TABLE safe(ok INTEGER CHECK(ok=1)); INSERT INTO safe VALUES(0); DELETE FROM preserved; COMMIT;' > "$WORK/transaction.log" 2>&1; then
+            printf 'failed CHECK unexpectedly succeeded: %s\n' "$sqlite_bin"
+            exit 1
+        fi
+        [ "$("$sqlite_bin" "$db" 'SELECT value FROM preserved;')" = keep ]
+        [ "$("$sqlite_bin" "$db" 'PRAGMA integrity_check;')" = ok ]
+    done
+)
+test_statement_failure_rollback
+printf 'PASS: failed SQL statements stop before downstream DELETE and COMMIT\n'

@@ -14,8 +14,9 @@ browser data, usage databases, caches, Trash, and related activity traces.
   under **System Settings > Privacy & Security > Full Disk Access**.
 - System Integrity Protection can block some system locations.
 - macOS services can recreate caches, indexes, and databases after cleanup.
-- Close browsers before the `browser` module. The script skips active browser
-  databases to avoid corruption. A real run with skipped browser data exits `2`.
+- Close browsers and their background/helper processes before the `browser` module. The script skips active browser
+  site and session data to avoid corruption. A real run with skipped browser data
+  exits `2`. Keep browsers closed until cleanup finishes.
 - Firefox history cleanup preserves bookmarks and keywords in `places.sqlite`.
   If SQLite is unavailable or cleanup fails, the database is retained and the
   run reports a failure.
@@ -51,7 +52,7 @@ Dry-run and `--list` do not create logs.
 | `shell` | Shell and REPL histories, Atuin history, and directory jump stores |
 | `systemlogs` | Legacy system logs and diagnostic reports |
 | `audit` | Existing BSM audit trail files; BSM is legacy on current macOS |
-| `browser` | Safari, Chrome-family, and Firefox histories and caches |
+| `browser` | Safari, Chrome-family, and Firefox histories, site data, tab recovery, and caches |
 | `unified` | Apple unified logging store |
 | `fileevents` | Quarantine databases and FSEvents stores |
 | `usage` | Per-user KnowledgeC, recent items, and Notification Center data |
@@ -80,6 +81,51 @@ the script does not change mount permissions. Disconnected volumes, custom
 mount points, and Trash for users without an eligible local home are outside
 this scope. The per-UID layout is also used by the
 [macOS trash utility](https://github.com/morgant/tools-osx/blob/master/src/trash).
+
+## Browser site data and tab recovery
+
+The `browser` module removes site cookies and local tab-recovery files. This
+signs you out of websites and can remove offline site files and unfinished
+forms. Browser bookmarks, saved passwords, preferences, and separate extension
+settings stores remain. Browser sync and cloud copies are not cleared.
+
+| Browser | Additional scope |
+| --- | --- |
+| Chrome, Chromium, Edge, Brave | `Network/Cookies`, device-bound site sessions, `Sessions` and `Sessions_Encrypted`, legacy current/last session and tab files, and HTTP(S)/file origin IndexedDB stores; default, numbered, and guest profiles |
+| Firefox | HTTP(S)/file origin directories in default, temporary, permanent, and legacy persistent storage; these hold IndexedDB, local storage, cache storage, and related site files. Known legacy SQLite local-storage tables and quota-cache metadata are filtered by origin. Current and legacy session files and recovery backups are removed |
+| Safari | Legacy session and recently closed tab files, saved application state, container cookies, and cookies in named WebKit data stores |
+
+Some stores combine website data with extension data. By default, those stores
+remain and the run exits `2` with their paths. Use the following explicit option
+if you also want to remove the extension data in these shared stores:
+
+```sh
+./shredder.sh --modules browser --include-extension-data --dry-run --debug
+sudo ./shredder.sh --modules browser --include-extension-data --force
+```
+
+This option can reset extension settings and sign-ins. It includes Chromium's
+Local Storage, Session Storage, Service Worker, File System, legacy databases,
+Application Cache, WebStorage, and all IndexedDB stores. It also includes
+Firefox extension-origin site storage and legacy local-storage databases, plus
+Safari's shared WebKit stores under `WebsiteData` and named `WebsiteDataStore`
+directories, plus service-worker, cache-storage, and migrated storage under
+WebKit cache roots. It does not remove the separate extension settings directories.
+
+Safari's modern `SafariTabs.db` also holds saved and synced tab groups. The
+script retains it and reports exit `2`, even with `--include-extension-data`.
+Remove those tabs through Safari if required. Custom browser profile locations,
+other browser products, synced copies, and exported session files are outside
+this module's automatic scope. Without `--include-extension-data`, unknown legacy Firefox local-storage SQLite
+schemas are retained and reported rather than deleted. Unknown quota-cache
+schemas are always retained and reported. A busy SQLite checkpoint also reports
+exit `2`; close background readers and repeat cleanup to remove old WAL pages.
+
+Storage layouts are based on [Chromium profile file names](https://github.com/chromium/chromium/blob/main/chrome/common/chrome_constants.h),
+[Chromium session storage](https://github.com/chromium/chromium/blob/main/components/sessions/core/session_constants.cc),
+[Firefox quota storage](https://github.com/mozilla/gecko-dev/blob/master/dom/quota/ActorsParent.cpp),
+[Firefox legacy local storage](https://github.com/mozilla/gecko-dev/blob/master/dom/storage/StorageDBUpdater.cpp),
+and [WebKit data-store paths](https://github.com/WebKit/WebKit/blob/main/Source/WebKit/UIProcess/WebsiteData/Cocoa/WebsiteDataStoreCocoa.mm).
 
 ## Shell history stores
 

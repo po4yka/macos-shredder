@@ -53,6 +53,7 @@ DEBUG=0
 FORCE=0
 LIST_ONLY=0
 INCLUDE_VOLUMES=0
+INCLUDE_EXTENSION_DATA=0
 PURGE_SNAPSHOTS=0
 AI_DERIVED=0
 AI_ROOTS=()
@@ -103,7 +104,7 @@ MODULE_DESCS=(
     "Shell and REPL histories, session data"
     "System logs and crash reports"
     "BSM audit logs"
-    "Browser histories, cookies, caches"
+    "Browser histories, site data and tab recovery"
     "Unified logging store"
     "Quarantine events and FSEvents"
     "KnowledgeC usage db and recent items"
@@ -624,12 +625,20 @@ run_as_user() {
     return 1
 }
 
-# browser_running PROC - true when the given browser process is running.
+# A failed process query blocks browser mutations just like a running browser.
 browser_running() {
-    local proc="$1"
+    local proc="$1" rc=0
     [ "$TEST_MODE" -eq 0 ] || return 1
-    command -v pgrep >/dev/null 2>&1 || return 1
-    pgrep -x "$proc" >/dev/null 2>&1
+    if ! command -v pgrep >/dev/null 2>&1; then
+        log_warn "cannot inspect browser processes; cleanup refused"
+        return 0
+    fi
+    pgrep -x "$proc( Helper.*)?" >/dev/null 2>&1 || rc=$?
+    case "$rc" in
+        0) return 0 ;;
+        1) return 1 ;;
+        *) log_warn "browser process query failed; cleanup refused"; return 0 ;;
+    esac
 }
 
 ###############################################################################
@@ -653,6 +662,9 @@ Options:
   -f, --force           Do not ask for confirmation (auto-answer yes)
       --logfile FILE    Create a new private operation log after confirmation
       --include-volumes Also process mounted volumes under /Volumes
+      --include-extension-data
+                        Also delete mixed website/extension storage. This can
+                        reset extension settings and extension sign-ins.
       --purge-snapshots Delete APFS Time Machine local snapshots before modules
       --ai-derived     Also remove AI memory, plans and generated artifacts
       --ai-root KIND=PATH
@@ -784,6 +796,10 @@ parse_args() {
                 ;;
             --include-volumes)
                 INCLUDE_VOLUMES=1
+                shift
+                ;;
+            --include-extension-data)
+                INCLUDE_EXTENSION_DATA=1
                 shift
                 ;;
             --purge-snapshots)
@@ -1338,33 +1354,123 @@ module_audit() {
 }
 
 # --- module: browser ---------------------------------------------------------
+# Shared LevelDB/hashed stores cannot be separated by origin without the
+# browser's storage engine. Keep them unless extension data was also selected.
+browser_mixed_store() {
+    local target="$1"
+    [ -e "$target" ] || [ -L "$target" ] || return 0
+    if [ "$INCLUDE_EXTENSION_DATA" -eq 1 ]; then
+        remove_path "$target"
+    else
+        log_warn "mixed website/extension data retained (use --include-extension-data): $target"
+        [ "$DRY_RUN" -eq 1 ] || FAILED_COUNT=$((FAILED_COUNT + 1))
+    fi
+    return 0
+}
+
+clean_safari_data_store() {
+    local root="$1" item
+    # These exact stores contain website data, but can include extension origins.
+    for item in Default Origins LocalStorage IndexedDB WebSQL ServiceWorkers \
+        CacheStorage IsolatedSites; do
+        browser_mixed_store "$root/$item"
+    done
+    remove_path "$root/Cookies/Cookies.binarycookies"
+    return 0
+}
+
+# WebKit keeps persistent service-worker and cache-storage data inside cache
+# roots too. Do not erase the WebKit tree as an ordinary disposable cache.
+clean_safari_cache_root() {
+    local root="$1" entry item
+    guard_mutation_target "$root" || return 0
+    while read_find_path entry; do
+        [ "${entry##*/}" = WebKit ] && continue
+        remove_path "$entry"
+    done < <(find_checked "$root" -mindepth 1 -maxdepth 1 -print0)
+    for item in NetworkCache MediaCache; do
+        clear_dir_contents "$root/WebKit/$item"
+    done
+    for item in CacheStorage ServiceWorkers Storage; do
+        browser_mixed_store "$root/WebKit/$item"
+    done
+    return 0
+}
+
 clean_safari_for_home() {
-    local h="$1"
-    local saf="$h/Library/Safari"
+    local h="$1" saf root profile item
+    saf="$h/Library/Safari"
     if browser_running "Safari" && { [ -d "$saf" ] \
         || [ -d "$h/Library/Containers/com.apple.Safari" ] \
-        || [ -d "$h/Library/Cookies" ]; }; then
-        log_warn "Safari is running; skipping Safari database deletion (data integrity)"
+        || [ -d "$h/Library/Cookies" ] \
+        || [ -d "$h/Library/WebKit/com.apple.Safari" ] \
+        || [ -d "$h/Library/Caches/com.apple.Safari" ] \
+        || [ -d "$h/Library/Saved Application State/com.apple.Safari.savedState" ]; }; then
+        log_warn "Safari is running or cannot be checked; skipping Safari site and session data"
         [ "$DRY_RUN" -eq 1 ] || FAILED_COUNT=$((FAILED_COUNT + 1))
     else
-        remove_sqlite_db "$saf/History.db"
-        remove_path "$saf/History.db-lock"
-        remove_path "$saf/Downloads.plist"
-        remove_path "$saf/TopSites.plist"
-        remove_path "$saf/LastSession.plist"
+        for root in "$saf" "$h/Library/Containers/com.apple.Safari/Data/Library/Safari"; do
+            remove_sqlite_db "$root/History.db"
+            remove_path "$root/History.db-lock"
+            for item in Downloads.plist TopSites.plist LastSession.plist RecentlyClosedTabs.plist; do
+                remove_path "$root/$item"
+            done
+            # SafariTabs also holds saved tab groups. Keep it: deleting the file
+            # would exceed tab-recovery cleanup and can affect synced state.
+            if [ -e "$root/SafariTabs.db" ]; then
+                log_warn "SafariTabs.db retained: mixed saved/synced tab groups require Safari UI cleanup: $root/SafariTabs.db"
+                [ "$DRY_RUN" -eq 1 ] || FAILED_COUNT=$((FAILED_COUNT + 1))
+            fi
+            browser_mixed_store "$root/LocalStorage"
+            browser_mixed_store "$root/Databases"
+        done
+        for root in "$h/Library/WebKit/com.apple.Safari" \
+            "$h/Library/Containers/com.apple.Safari/Data/Library/WebKit"; do
+            clean_safari_data_store "$root/WebsiteData"
+            guard_mutation_target "$root/WebsiteDataStore" || continue
+            for profile in "$root"/WebsiteDataStore/*/; do
+                [ -d "$profile" ] || continue
+                clean_safari_data_store "${profile%/}"
+            done
+        done
         remove_path "$h/Library/Containers/com.apple.Safari/Data/Library/Cookies/Cookies.binarycookies"
         remove_path "$h/Library/Cookies/Cookies.binarycookies"
+        clear_dir_contents "$h/Library/Saved Application State/com.apple.Safari.savedState"
+        clear_dir_contents "$h/Library/Containers/com.apple.Safari/Data/Library/Saved Application State/com.apple.Safari.savedState"
+        clean_safari_cache_root "$h/Library/Caches/com.apple.Safari"
+        clean_safari_cache_root "$h/Library/Containers/com.apple.Safari/Data/Library/Caches"
     fi
-    clear_dir_contents "$h/Library/Caches/com.apple.Safari"
     return 0
 }
 
 clean_chrome_profile_dbs() {
-    local prof="$1"
+    local prof="$1" item origin
     remove_sqlite_db "$prof/History"
     remove_sqlite_db "$prof/Cookies"
+    remove_sqlite_db "$prof/Network/Cookies"
+    remove_sqlite_db "$prof/Network/Device Bound Sessions"
+    remove_sqlite_db "$prof/Device Bound Sessions"
     remove_sqlite_db "$prof/Top Sites"
     remove_sqlite_db "$prof/Web Data"
+    for item in Sessions Sessions_Encrypted 'Current Session' 'Current Tabs' 'Last Session' 'Last Tabs'; do
+        remove_path "$prof/$item"
+    done
+    # These stores can also hold extension data, and some use opaque bucket IDs.
+    for item in 'Local Storage' 'Session Storage' 'Service Worker' 'File System' \
+        databases 'Application Cache' WebStorage; do
+        browser_mixed_store "$prof/$item"
+    done
+    if [ "$INCLUDE_EXTENSION_DATA" -eq 1 ]; then
+        remove_path "$prof/IndexedDB"
+    elif guard_mutation_target "$prof/IndexedDB"; then
+        while read_find_path origin; do
+            case "${origin##*/}" in
+                http_*|https_*|file_*) remove_path "$origin" ;;
+                chrome-extension_*) ;; # Extension settings and credentials stay.
+                *) browser_mixed_store "$origin" ;;
+            esac
+        done < <(find_checked "$prof/IndexedDB" -mindepth 1 -maxdepth 1 -print0)
+    fi
     return 0
 }
 
@@ -1385,17 +1491,17 @@ clean_chrome_family_for_home() {
         cache_appdir="$h/Library/Caches/${rel#Library/Application Support/}"
         [ -d "$appdir" ] || continue
         if browser_running "$proc"; then
-            log_warn "$label is running; skipping $label database deletion (data integrity)"
+            log_warn "$label is running or cannot be checked; skipping $label site and session data"
             [ "$DRY_RUN" -eq 1 ] || FAILED_COUNT=$((FAILED_COUNT + 1))
         else
-            for prof in "$appdir/Default" "$appdir"/Profile\ */; do
+            for prof in "$appdir/Default" "$appdir/Guest Profile" "$appdir"/Profile\ */; do
                 prof="${prof%/}"
                 [ -d "$prof" ] || continue
                 clean_chrome_profile_dbs "$prof"
             done
         fi
         # Pure cache directories are safe even while the browser runs.
-        for prof in "$appdir/Default" "$appdir"/Profile\ */; do
+        for prof in "$appdir/Default" "$appdir/Guest Profile" "$appdir"/Profile\ */; do
             prof="${prof%/}"
             [ -d "$prof" ] || continue
             clean_chrome_profile_caches "$prof"
@@ -1405,9 +1511,21 @@ clean_chrome_family_for_home() {
 Google Chrome|Google Chrome|Library/Application Support/Google/Chrome
 Chromium|Chromium|Library/Application Support/Chromium
 Microsoft Edge|Microsoft Edge|Library/Application Support/Microsoft Edge
-Brave|Brave|Library/Application Support/BraveSoftware/Brave-Browser
+Brave|Brave Browser|Library/Application Support/BraveSoftware/Brave-Browser
 CHROME_BROWSERS
     return 0
+}
+
+# A successful checkpoint command can still report busy (first field = 1).
+# Do not claim cleanup succeeded while a reader can retain the old WAL pages.
+browser_sqlite_compact() {
+    local db="$1" sqlite_bin="$2" checkpoint
+    ai_sqlite_command "$db" "$sqlite_bin" 'VACUUM;' >/dev/null 2>&1 || return 1
+    checkpoint="$(ai_sqlite_command "$db" "$sqlite_bin" 'PRAGMA wal_checkpoint(TRUNCATE);' 2>/dev/null)" || return 1
+    case "$checkpoint" in
+        0\|*) return 0 ;;
+        *) log_warn "browser database checkpoint is busy; close background readers and retry: $db"; return 1 ;;
+    esac
 }
 
 # Places also stores bookmarks and keywords. Never remove this database or
@@ -1427,7 +1545,7 @@ purge_firefox_history() {
         FAILED_COUNT=$((FAILED_COUNT + 1))
         return 0
     fi
-    if ! tables="$(run_target_command "$db" "$sqlite_bin" -readonly "$db" \
+    if ! tables="$(ai_sqlite_command "$db" "$sqlite_bin" \
         "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('moz_places_metadata','moz_origins');" 2>/dev/null)"; then
         log_warn "failed to inspect Firefox Places database: $db"
         FAILED_COUNT=$((FAILED_COUNT + 1))
@@ -1454,10 +1572,11 @@ purge_firefox_history() {
         *moz_origins*) sql="$sql DELETE FROM moz_origins WHERE NOT EXISTS (
             SELECT 1 FROM moz_places WHERE origin_id = moz_origins.id);" ;;
     esac
-    sql="$sql COMMIT; VACUUM; PRAGMA wal_checkpoint(TRUNCATE);"
+    sql="$sql COMMIT;"
     # -bail stops at the first SQL error. Closing an uncommitted transaction
     # rolls it back, rather than leaving only part of the history removed.
-    if run_target_command "$db" "$sqlite_bin" -batch -bail "$db" "$sql" >/dev/null 2>&1; then
+    if ai_sqlite_command "$db" "$sqlite_bin" "$sql" >/dev/null 2>&1 \
+        && browser_sqlite_compact "$db" "$sqlite_bin"; then
         log_debug "cleared Firefox history; bookmarks preserved: $db"
         CLEANED_COUNT=$((CLEANED_COUNT + 1))
     else
@@ -1467,13 +1586,101 @@ purge_firefox_history() {
     return 0
 }
 
+# Firefox legacy local storage can also contain extension origins. Select only
+# web/file schemes; keep unknown schemas intact and report incomplete cleanup.
+purge_firefox_localstorage() {
+    local db="$1" sqlite_bin sql
+    [ -e "$db" ] || [ -L "$db" ] || return 0
+    if [ "$INCLUDE_EXTENSION_DATA" -eq 1 ]; then
+        remove_sqlite_db "$db"
+        return 0
+    fi
+    guard_mutation_target "$db" || return 0
+    if [ "$DRY_RUN" -eq 1 ]; then
+        log_debug "[DRY RUN] would clear web origins in Firefox local storage: $db"
+        CLEANED_COUNT=$((CLEANED_COUNT + 1))
+        return 0
+    fi
+    sqlite_bin="$(command -v sqlite3 2>/dev/null || true)"
+    sql="PRAGMA secure_delete=ON; BEGIN IMMEDIATE;
+        CREATE TEMP TABLE safe_schema(ok INTEGER CHECK(ok=1));
+        INSERT INTO safe_schema SELECT NOT EXISTS (
+            SELECT 1 FROM sqlite_master WHERE type='trigger'
+            OR (type='table' AND name NOT IN ('webappsstore2','database','sqlite_sequence')));
+        DELETE FROM webappsstore2 WHERE originKey GLOB '*:http:*'
+            OR originKey GLOB '*:https:*' OR originKey GLOB '*:file:*';
+        COMMIT;"
+    if [ -n "$sqlite_bin" ] && ai_sqlite_command "$db" "$sqlite_bin" "$sql" >/dev/null 2>&1 \
+        && browser_sqlite_compact "$db" "$sqlite_bin"; then
+        CLEANED_COUNT=$((CLEANED_COUNT + 1))
+    else
+        log_warn "Firefox local storage could not be cleared safely; retained: $db"
+        FAILED_COUNT=$((FAILED_COUNT + 1))
+    fi
+    return 0
+}
+
+# Quota cache rows contain origin URLs even after origin directories are gone.
+# Preserve version/repository records and extension origins; invalidate the cache
+# so Firefox rebuilds usage accounting from the remaining directories.
+purge_firefox_storage_cache() {
+    local db="$1" sqlite_bin sql extension_sql=""
+    [ -e "$db" ] || [ -L "$db" ] || return 0
+    guard_mutation_target "$db" || return 0
+    if [ "$DRY_RUN" -eq 1 ]; then
+        log_debug "[DRY RUN] would clear website origin metadata in Firefox quota cache: $db"
+        CLEANED_COUNT=$((CLEANED_COUNT + 1))
+        return 0
+    fi
+    sqlite_bin="$(command -v sqlite3 2>/dev/null || true)"
+    [ "$INCLUDE_EXTENSION_DATA" -eq 0 ] || extension_sql="OR origin GLOB 'moz-extension://*'"
+    sql="PRAGMA secure_delete=ON; BEGIN IMMEDIATE;
+        CREATE TEMP TABLE safe_schema(ok INTEGER CHECK(ok=1));
+        INSERT INTO safe_schema SELECT NOT EXISTS (
+            SELECT 1 FROM sqlite_master WHERE type='trigger'
+            OR (type='table' AND name NOT IN ('database','cache','repository','origin')));
+        DELETE FROM origin WHERE origin GLOB 'http://*' OR origin GLOB 'https://*'
+            OR origin GLOB 'file://*' $extension_sql;
+        UPDATE cache SET valid=0;
+        COMMIT;"
+    if [ -n "$sqlite_bin" ] && ai_sqlite_command "$db" "$sqlite_bin" "$sql" >/dev/null 2>&1 \
+        && browser_sqlite_compact "$db" "$sqlite_bin"; then
+        CLEANED_COUNT=$((CLEANED_COUNT + 1))
+    else
+        log_warn "Firefox quota metadata could not be cleared safely; retained: $db"
+        FAILED_COUNT=$((FAILED_COUNT + 1))
+    fi
+    return 0
+}
+
+clean_firefox_site_data() {
+    local prof="$1" repository origin
+    purge_firefox_storage_cache "$prof/storage.sqlite"
+    purge_firefox_localstorage "$prof/webappsstore.sqlite"
+    purge_firefox_localstorage "$prof/storage/ls-archive.sqlite"
+    for repository in default temporary permanent persistent; do
+        guard_mutation_target "$prof/storage/$repository" || continue
+        while read_find_path origin; do
+            case "${origin##*/}" in
+                http+++*|https+++*|file+++*) remove_path "$origin" ;;
+                moz-extension+++*)
+                    [ "$INCLUDE_EXTENSION_DATA" -eq 0 ] || remove_path "$origin"
+                    ;;
+                chrome|about+*) ;; # Browser-internal data is not website data.
+                *) browser_mixed_store "$origin" ;;
+            esac
+        done < <(find_checked "$prof/storage/$repository" -mindepth 1 -maxdepth 1 -print0)
+    done
+    return 0
+}
+
 clean_firefox_for_home() {
     local h="$1"
     local profiles="$h/Library/Application Support/Firefox/Profiles"
     [ -d "$profiles" ] || return 0
     local skip_dbs=0 prof
     if browser_running "firefox"; then
-        log_warn "Firefox is running; skipping Firefox database deletion (data integrity)"
+        log_warn "Firefox is running or cannot be checked; skipping Firefox site and session data"
         [ "$DRY_RUN" -eq 1 ] || FAILED_COUNT=$((FAILED_COUNT + 1))
         skip_dbs=1
     fi
@@ -1486,6 +1693,9 @@ clean_firefox_for_home() {
             remove_sqlite_db "$prof/formhistory.sqlite"
             remove_path "$prof/sessionstore.jsonlz4"
             clear_dir_contents "$prof/sessionstore-backups"
+            remove_path "$prof/sessionstore.js"
+            remove_path "$prof/sessionstore.bak"
+            clean_firefox_site_data "$prof"
         fi
         clear_dir_contents "$prof/cache2"
         clear_dir_contents "$prof/thumbnails"
