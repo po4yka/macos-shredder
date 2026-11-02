@@ -4024,12 +4024,24 @@ validate_selected_artifact_options() {
     fi
 }
 
+# eligible_home PATH - succeed when PATH is inside a home that the common
+# user enumerator accepts (a directory-service account in real mode).
+eligible_home() {
+    local path="$1" u h uid found=1
+    while IFS=$'\t' read -r u h uid; do
+        case "$path" in "$h"/*) found=0 ;; esac
+    done < <(enumerate_users)
+    return "$found"
+}
+
 selected_artifact_safe() {
     local target="$1" relative home
     case "$target" in "$USERS_DIR"/*/*) ;; *) return 1 ;; esac
     relative="${target#"$USERS_DIR"/}"; home="$USERS_DIR/${relative%%/*}"
     case "${relative%%/*}" in ''|Shared|Guest|.*) return 1 ;; esac
     [ -d "$home" ] && [ -e "$target" ] || return 1
+    # An orphaned home of a deleted account is not an eligible home.
+    eligible_home "$target" || return 1
     guard_mutation_target "$target" || return 1
     # Validate all descendants as the home owner. find visits mount points but
     # does not cross them; compare each device to reject those points as well.

@@ -581,3 +581,13 @@ test_var_folders_scan_depth() (
 )
 test_var_folders_scan_depth
 printf 'PASS: /var/folders scans stay at the cache depth\n'
+
+test_selected_artifact_home() (
+    setup_case artifact-home
+    mkdir -p "$USERS_DIR/alice" "$USERS_DIR/olduser/Exports/report.json"
+    # shellcheck disable=SC2329 # replaces the directory-service enumerator
+    enumerate_users() { printf 'alice\t%s\t501\n' "$USERS_DIR/alice"; }
+    if selected_artifact_safe "$USERS_DIR/olduser/Exports/report.json"; then return 1; fi
+)
+test_selected_artifact_home
+printf 'PASS: selected artifacts outside an enumerated home are refused\n'
