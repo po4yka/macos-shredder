@@ -308,3 +308,24 @@ test_fixture_rebuild() (
 )
 test_fixture_rebuild
 printf 'PASS: three fixture builds produce identical files, directories, and links\n'
+
+test_dsstore_volume_alias() (
+    setup_case dsstore-alias
+    mkdir -p "$USERS_DIR/alice/Documents" "$SANDBOX/Volumes/BACKUP"
+    printf 'trace\n' > "$USERS_DIR/alice/Documents/.DS_Store"
+    printf 'trace\n' > "$SANDBOX/Volumes/BACKUP/.DS_Store"
+    mkdir -p "$SANDBOX/Library"
+    printf 'startup disk\n' > "$SANDBOX/Library/.DS_Store"
+    # macOS links /Volumes/Macintosh HD to the startup disk.
+    ln -s "$SANDBOX" "$SANDBOX/Volumes/Macintosh HD"
+    local rc=0
+    /bin/bash "$SHREDDER" --force --include-volumes --modules dsstore \
+        > "$WORK/dsstore-alias.log" 2>&1 || rc=$?
+    [ "$rc" -eq 0 ]
+    ! grep -q 'refusing' "$WORK/dsstore-alias.log"
+    [ ! -e "$USERS_DIR/alice/Documents/.DS_Store" ]
+    [ ! -e "$SANDBOX/Volumes/BACKUP/.DS_Store" ]
+    [ -s "$SANDBOX/Library/.DS_Store" ]
+)
+test_dsstore_volume_alias
+printf 'PASS: dsstore volume scan skips the startup-disk alias\n'

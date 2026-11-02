@@ -2424,8 +2424,23 @@ trash_stat_number() {
     printf '%s\n' "$value"
 }
 
+# mounted_volume DIR - succeed when DIR is a separate mounted volume. Sandbox
+# fixtures share one device, so test mode accepts every real directory.
+mounted_volume() {
+    local vol="$1" volume_device parent_device
+    [ "$TEST_MODE" -eq 0 ] || return 0
+    volume_device="$(trash_stat_number %d "$vol")" || volume_device=''
+    parent_device="$(trash_stat_number %d "${vol%/*}")" || parent_device=''
+    if [ -z "$volume_device" ] || [ -z "$parent_device" ]; then
+        log_warn "cannot identify mounted volume: $vol"
+        [ "$DRY_RUN" -eq 1 ] || FAILED_COUNT=$((FAILED_COUNT + 1))
+        return 1
+    fi
+    [ "$volume_device" != "$parent_device" ]
+}
+
 clean_volume_trash_for_home() {
-    local h="$1" uid="$2" owner vol trash owner_on_volume volume_device parent_device
+    local h="$1" uid="$2" owner vol trash owner_on_volume
     owner="$(trash_stat_number %u "$h")" || {
         log_warn "cannot identify Trash owner: $h"
         [ "$DRY_RUN" -eq 1 ] || FAILED_COUNT=$((FAILED_COUNT + 1))
@@ -2442,16 +2457,7 @@ clean_volume_trash_for_home() {
         # /Volumes/Macintosh HD normally links to /. Never follow mount aliases.
         [ ! -L "$vol" ] && [ -d "$vol" ] || continue
         guard_mutation_target "$vol" || continue
-        if [ "$TEST_MODE" -eq 0 ]; then
-            volume_device="$(trash_stat_number %d "$vol")" || volume_device=''
-            parent_device="$(trash_stat_number %d "${vol%/*}")" || parent_device=''
-            if [ -z "$volume_device" ] || [ -z "$parent_device" ]; then
-                log_warn "cannot identify mounted volume: $vol"
-                [ "$DRY_RUN" -eq 1 ] || FAILED_COUNT=$((FAILED_COUNT + 1))
-                continue
-            fi
-            [ "$volume_device" != "$parent_device" ] || continue
-        fi
+        mounted_volume "$vol" || continue
         trash="$vol/.Trashes/$uid"
         guard_mutation_target "$trash" || continue
         [ -d "$trash" ] || continue
@@ -2501,13 +2507,15 @@ module_trash() {
 }
 
 # --- module: dsstore ---------------------------------------------------------
+# Stay on the volume of BASE: the startup disk and other mounts are separate
+# targets with their own selection rules.
 clean_dsstore_tree() {
     local base="$1"
     local f
     [ -d "$base" ] || return 0
     while read_find_path f; do
         remove_path "$f"
-    done < <(find_checked "$base" \( -name ".Spotlight-V100" -o -name ".Trashes" -o -name ".Trash" \) -prune \
+    done < <(find_checked "$base" -xdev \( -name ".Spotlight-V100" -o -name ".Trashes" -o -name ".Trash" \) -prune \
              -o -type f -name ".DS_Store" -print0)
 }
 
@@ -2524,10 +2532,13 @@ module_dsstore() {
         fi
     done < <(enumerate_users)
     if [ "$INCLUDE_VOLUMES" -eq 1 ]; then
-        for vol in "$SANDBOX"/Volumes/*/; do
-            [ -d "$vol" ] || continue
+        while read_find_path vol; do
+            # /Volumes/Macintosh HD normally links to /. Never follow mount
+            # aliases, and skip directories on the startup device.
+            [ ! -L "$vol" ] && [ -d "$vol" ] || continue
+            mounted_volume "$vol" || continue
             clean_dsstore_tree "$vol"
-        done
+        done < <(find_checked "$SANDBOX/Volumes" -mindepth 1 -maxdepth 1 -print0)
     fi
     return 0
 }
