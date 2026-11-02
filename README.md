@@ -40,8 +40,8 @@ sudo ./shredder.sh --modules shell,browser,trash --force
 ```
 
 Without `--modules`, the script runs the 16 standard modules, including `ai`
-and `editors`. The additional `clipboard`, `headless`, `slackexport`, `terminal`, and `finderhistory`
-modules require explicit selection. Modules run in the order listed below, regardless of the order in
+and `editors`. Additional modules marked as explicit in the table below
+require explicit selection. Modules run in the order listed below, regardless of the order in
 `--modules`. Without `--force`, a real run asks for confirmation. `--force`
 only skips that prompt; it does not bypass process, path, or database checks.
 
@@ -69,8 +69,9 @@ home directories. There is no single-user selection option.
 | `-d`, `--debug` | Show detailed operations and skipped paths |
 | `-f`, `--force` | Skip the cleanup confirmation prompt |
 | `--logfile FILE` | Create a private operation log after confirmation |
-| `--include-volumes` | Include mounted-volume targets in the selected `trash`, `fileevents`, and `dsstore` modules |
+| `--include-volumes` | Include mounted-volume targets in the selected `trash`, `fsevents`, and `dsstore` modules |
 | `--include-extension-data` | Allow `browser` to remove shared website/extension storage; this can reset extension settings and sign-ins |
+| `--logs-older-than N` | Remove only closed legacy log rotations and diagnostic reports older than N days in `systemlogs`/`audit`; rejects `unified` |
 | `--purge-snapshots` | Delete local Time Machine snapshots before the selected modules run |
 | `--ai-derived` | Include supported memory, plans, and generated artifacts in `ai` cleanup |
 | `--ai-extended` | Include supported Gemini, Antigravity, desktop AI, context-mode, and Serena traces in `ai` cleanup |
@@ -102,7 +103,8 @@ Dry-run and `--list` do not create logs.
 | `audit` | Existing BSM audit trail files; BSM is legacy on current macOS |
 | `browser` | Safari, Chrome-family, and Firefox histories, site data, tab recovery, and caches |
 | `unified` | Apple unified logging store |
-| `fileevents` | Quarantine databases and FSEvents stores |
+| `fileevents` | Quarantine download event databases |
+| `fsevents` | Per-volume FSEvents history through CoreServices; explicit selection only |
 | `usage` | Per-user KnowledgeC, recent items, and Notification Center data |
 | `spotlight` | Spotlight erase-and-rebuild operation |
 | `quicklook` | Per-user Quick Look caches |
@@ -123,6 +125,48 @@ Mounted volumes are excluded by default. Use `--include-volumes` to include
 their FSEvents, `.DS_Store` data, and per-user Trash in the corresponding
 selected modules. Use `--purge-snapshots` only when you also want to delete
 local Time Machine snapshots.
+
+### Log retention and FSEvents
+
+```sh
+./shredder.sh --modules systemlogs,audit --logs-older-than 30 --dry-run --debug
+./shredder.sh --modules fsevents --dry-run --debug
+./shredder.sh --modules fsevents --include-volumes --dry-run --debug
+```
+
+`--logs-older-than N` accepts 1 through 99999 days. It uses file modification
+time, with an exact N × 24-hour cutoff. It removes numeric rotations of the
+known legacy system logs and recognized diagnostic report files, including
+per-user reports. It retains current logs, unknown files, incomplete audit
+trails, the audit `current` target, and files with open handles. An inconclusive
+handle check retains the file and reports failure. Age mode does not rotate
+or restart audit logging. Close affected applications during cleanup: an
+open-handle check cannot prevent a process from opening a file immediately
+after the check. These rules apply only to `systemlogs` and `audit`; other
+selected modules retain their normal behavior.
+
+Unified logging has no supported age cutoff for `log erase`. Its `--ttl`
+option selects the time-to-live store; it is not a retention period. Selecting
+`unified` together with `--logs-older-than` fails before any cleanup. Without
+an age option, existing `systemlogs`, `audit`, and `unified` behavior remains
+unchanged, including their membership in the standard module set.
+
+`fileevents` now clears only quarantine event databases. FSEvents requires
+explicit `--modules fsevents`, even without `--include-volumes`. The startup
+store is on `/System/Volumes/Data`. Extra volumes must be mounted directly
+under `/Volumes`, use APFS or HFS, be writable, and have ownership enabled.
+Mount aliases, the startup device under another path, unmounted directories,
+and unsupported volumes are refused or skipped. The script calls Apple's
+`FSEventsPurgeEventsForDeviceUpToEventId` through the built-in JXA bridge; it
+does not delete the live `.fseventsd` files or change security settings. API
+failure is reported without a raw-file fallback. Successful API acceptance
+does not prove removal of every physical copy; new events can appear at once,
+and backup/index clients can need a full rescan. See the installed macOS
+`FSEvents.h` API contract and `man log` for the native operation boundaries.
+
+`--purge-snapshots` covers existing local Time Machine snapshots. It does not
+delete Time Machine backup sets on external/network destinations, APFS
+snapshots from other tools, or cloud backup history.
 
 ### Mounted-volume Trash
 
@@ -567,7 +611,7 @@ that directory. Root-owned user directories are refused.
 ## Tests
 
 The integration suite uses temporary sandboxes for cleanup. It covers CLI
-behavior, all 21 modules, dry-run stability, process and path checks, AI and
+behavior, all registered modules, dry-run stability, process and path checks, AI and
 editor settings preservation, shell stores, browser origins and tab recovery,
 and mounted-volume Trash. SQLite tests cover transaction rollback, active
 readers and writers, WAL cleanup, unknown schemas, and retained credentials.

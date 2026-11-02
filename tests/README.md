@@ -54,6 +54,7 @@ checkpoint truncation can complete.
 | `browser-stores.sh` | Website storage, tab recovery, extension opt-in, and WAL handling |
 | `shell-stores.sh` | Atuin and alternative shell history stores |
 | `editor-history.sh` | Editor local history, retained settings, and unsaved buffers |
+| `system-traces.sh` | Age retention, current/open log preservation, FSEvents scope and native command contracts |
 | `volume-trash.sh` | Opt-in mounted-volume Trash cleanup and owner checks |
 | `create-artifacts.sh` | Builds the core fixture tree and optional manifest |
 | `verify-cleanup.sh` | Checks core cleanup results or dry-run stability |
@@ -123,7 +124,7 @@ remove it when finished. Never mark a real home or mounted volume as a sandbox.
 | Phase | Required behavior |
 | --- | --- |
 | A — CLI validation | Invalid or empty module selections return `64` and retain data |
-| B — module listing | `--list` returns `0` and includes all 21 module IDs |
+| B — module listing | `--list` returns `0` and includes all registered module IDs |
 | C — forced cleanup | Selected fixture data is removed for both users; bookmarks, audit `current`, excluded homes, and external-volume sentinels remain; corrupt SQLite makes verification fail |
 | D — dry-run | File hashes, directories, and symlink targets match the pre-run manifest; an added file makes verification fail |
 | E — sandbox guard | An unmarked root is refused before cleanup |
@@ -190,3 +191,9 @@ macOS it also uses native `plutil` and `defaults` on synthetic temporary
 plists: XML/binary preservation, exact key deletion, repeat runs and refusal
 of unknown types, malformed files and hardlinks. Linux reports the native
 part as unavailable; it does not emulate the Apple preference API.
+
+The system trace tests use marked fixtures and native command mocks. They do
+not call the real FSEvents purge API or erase live unified/audit stores. Native
+API acceptance, system permissions, and daemon behavior require a separate
+authorized host test. The read-only JXA event-ID lookup confirms bridge
+availability only.

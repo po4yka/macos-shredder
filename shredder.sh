@@ -56,6 +56,7 @@ DEBUG=0
 FORCE=0
 LIST_ONLY=0
 INCLUDE_VOLUMES=0
+LOGS_OLDER_THAN=""
 INCLUDE_EXTENSION_DATA=0
 PURGE_SNAPSHOTS=0
 AI_DERIVED=0
@@ -99,6 +100,7 @@ MODULE_IDS=(
     browser
     unified
     fileevents
+    fsevents
     usage
     spotlight
     quicklook
@@ -121,7 +123,8 @@ MODULE_DESCS=(
     "BSM audit logs"
     "Browser histories, site data and tab recovery"
     "Unified logging store"
-    "Quarantine events and FSEvents"
+    "Quarantine download event databases"
+    "FSEvents per-volume history (explicit selection only)"
     "KnowledgeC usage db and recent items"
     "Spotlight index"
     "Quick Look thumbnail caches"
@@ -722,6 +725,9 @@ Options:
       --include-extension-data
                         Also delete mixed website/extension storage. This can
                         reset extension settings and extension sign-ins.
+      --logs-older-than N
+                        Keep active logs and files modified in the last N days;
+                        requires systemlogs/audit without unified
       --purge-snapshots Delete local Time Machine snapshots before selected modules
       --ai-derived     Also remove AI memory, plans and generated artifacts
       --ai-extended    Include Gemini, Antigravity, desktop AI and plugin traces
@@ -871,6 +877,15 @@ parse_args() {
                 fi
                 shift
                 ;;
+            --logs-older-than)
+                [ $# -ge 2 ] || usage_error "--logs-older-than requires days"
+                LOGS_OLDER_THAN="$2"; shift 2
+                case "$LOGS_OLDER_THAN" in ''|*[!0-9]*|0*|??????*) usage_error "--logs-older-than must be between 1 and 99999" ;; esac
+                ;;
+            --logs-older-than=*)
+                LOGS_OLDER_THAN="${1#*=}"; shift
+                case "$LOGS_OLDER_THAN" in ''|*[!0-9]*|0*|??????*) usage_error "--logs-older-than must be between 1 and 99999" ;; esac
+                ;;
             --include-volumes)
                 INCLUDE_VOLUMES=1
                 shift
@@ -931,6 +946,12 @@ parse_args() {
     fi
     if [ "${#TERMINAL_LOG_FILES[@]}" -gt 0 ] && ! module_selected terminal; then
         usage_error "--terminal-log-file requires explicit --modules terminal"
+    fi
+    if [ -n "$LOGS_OLDER_THAN" ]; then
+        module_selected unified && usage_error "--logs-older-than cannot select unified: log erase has no age filter"
+        if ! module_selected systemlogs && ! module_selected audit; then
+            usage_error "--logs-older-than requires systemlogs or audit"
+        fi
     fi
     case "$HEADLESS_DAYS" in ''|*[!0-9]*|0*|??????*) usage_error "--headless-days must be between 1 and 99999" ;; esac
     if module_selected slackexport; then
@@ -1560,8 +1581,96 @@ SHELL_HISTORIES
     return 0
 }
 
+# Age selection uses file modification time, not dates inside log records.
+# lsof errors fail closed. There is no lock shared with arbitrary log writers;
+# applications must remain closed while their historical reports are removed.
+remove_aged_closed_log() {
+    local file="$1" modified now open_pids rc=0
+    guard_mutation_target "$file" || return 0
+    [ ! -L "$file" ] && [ -f "$file" ] || return 0
+    modified="$(stat -f %m "$file" 2>/dev/null || true)"
+    case "$modified" in ''|*[!0-9]*) modified="$(stat -c %Y "$file" 2>/dev/null || true)" ;; esac
+    now="$(date +%s)"
+    case "$modified:$now" in *[!0-9:]*|:*|*:) return 0 ;; esac
+    [ "$((now - modified))" -gt "$((LOGS_OLDER_THAN * 86400))" ] || return 0
+    if [ "$TEST_MODE" -eq 0 ]; then
+        if ! command -v lsof >/dev/null 2>&1; then
+            log_warn "cannot check active log handles; retaining: $file"
+            FAILED_COUNT=$((FAILED_COUNT + 1)); return 0
+        fi
+        # lsof can return 1 for both no matches and errors. Diagnostics must
+        # therefore be retained, not discarded as an empty result.
+        open_pids="$(lsof -t -- "$file" 2>&1)" || rc=$?
+        if [ -n "$open_pids" ]; then
+            if [ "$rc" -eq 0 ]; then
+                log_debug "retaining open or incompletely inspected log: $file"
+            else
+                log_warn "active log handle query failed; retaining: $file"
+                FAILED_COUNT=$((FAILED_COUNT + 1))
+            fi
+            return 0
+        fi
+        if [ "$rc" -ne 1 ]; then
+            log_warn "active log handle check was inconclusive; retaining: $file"
+            FAILED_COUNT=$((FAILED_COUNT + 1)); return 0
+        fi
+    fi
+    remove_path "$file"
+}
+
+clean_aged_log_tree() {
+    local dir="$1" file
+    guard_mutation_target "$dir" || return 0
+    [ ! -L "$dir" ] && [ -d "$dir" ] || return 0
+    while read_find_path file; do
+        case "${file##*/}" in
+            *.ips|*.crash|*.hang|*.spin|*.diag|*.log|*.log.gz|*.log.bz2)
+                remove_aged_closed_log "$file" ;;
+        esac
+    done < <(find_checked "$dir" -xdev -type f -print0)
+}
+
+clean_aged_system_logs() {
+    local lf file suffix u h uid
+    # Current logs, fsck outputs and daemon state directories are retained.
+    for lf in system.log wifi.log install.log accountpolicy.log appfirewall.log; do
+        while read_find_path file; do
+            suffix="${file##*/}"; suffix="${suffix#"$lf".}"
+            suffix="${suffix%.gz}"; suffix="${suffix%.bz2}"
+            case "$suffix" in ''|*[!0-9]*) continue ;; esac
+            remove_aged_closed_log "$file"
+        done < <(find_checked "$VAR_LOG" -maxdepth 1 -type f -name "$lf.*" -print0)
+    done
+    clean_aged_log_tree "$SANDBOX/Library/Logs/DiagnosticReports"
+    while IFS=$'\t' read -r u h uid; do
+        [ -d "$h" ] || continue
+        clean_aged_log_tree "$h/Library/Logs/DiagnosticReports"
+    done < <(enumerate_users)
+}
+
+clean_aged_audit_logs() {
+    local file base current_target
+    guard_mutation_target "$VAR_AUDIT" || return 0
+    current_target="$(readlink "$VAR_AUDIT/current" 2>/dev/null || true)"
+    current_target="${current_target##*/}"
+    while read_find_path file; do
+        base="${file##*/}"
+        [ -n "$current_target" ] && [ "$base" = "$current_target" ] && continue
+        # Never remove incomplete audit trails, even with no current symlink.
+        case "$base" in *not_terminated*|*crash_recovery*) continue ;; esac
+        # Closed BSM trails use numeric start/end timestamps, optionally .gz.
+        if [[ "$base" =~ ^[0-9]{14}\.[0-9]{14}(\.gz)?$ ]]; then
+            remove_aged_closed_log "$file"
+        fi
+    done < <(find_checked "$VAR_AUDIT" -maxdepth 1 -type f -name '[0-9]*' -print0)
+}
+
 # --- module: systemlogs ------------------------------------------------------
 module_systemlogs() {
+    if [ -n "$LOGS_OLDER_THAN" ]; then
+        clean_aged_system_logs
+        return 0
+    fi
     local lf u h uid rotated="" suffix
     for lf in system.log wifi.log install.log accountpolicy.log appfirewall.log; do
         truncate_file "$VAR_LOG/$lf"
@@ -1602,6 +1711,10 @@ module_audit() {
         if [ "$DRY_RUN" -eq 0 ]; then
             FAILED_COUNT=$((FAILED_COUNT + 1))
         fi
+        return 0
+    fi
+    if [ -n "$LOGS_OLDER_THAN" ]; then
+        clean_aged_audit_logs
         return 0
     fi
     if [ "$DRY_RUN" -eq 1 ]; then
@@ -2038,7 +2151,7 @@ module_unified() {
 
 # --- module: fileevents ------------------------------------------------------
 module_fileevents() {
-    local u h uid qdb vol
+    local u h uid qdb
     # Restart lsd first so it releases quarantine database handles before the
     # SQLite cleanup attempts to acquire a write lock.
     if [ "$TEST_MODE" -eq 0 ] && [ "$DRY_RUN" -eq 0 ]; then
@@ -2056,24 +2169,84 @@ module_fileevents() {
         sqlite_purge "$qdb" "DELETE FROM LSQuarantineEvent;"
         sqlite_purge "$qdb" "VACUUM;"
     done < <(enumerate_users)
-    # FSEvents on the startup volume; SIP commonly blocks this and the
-    # failure is counted honestly rather than hidden.
-    if [ -d "$SANDBOX/.fseventsd" ]; then
-        log_debug "attempting .fseventsd cleanup (may be blocked by SIP)"
-        clear_dir_contents "$SANDBOX/.fseventsd"
+    return 0
+}
+
+# --- module: fsevents (explicit selection only) ------------------------------
+# The CoreServices service owns the live database. Never remove .fseventsd
+# files directly on the host or restart its daemon.
+fsevents_native_purge() {
+    local device="$1"
+    osascript -l JavaScript - "$device" <<'JXA'
+ObjC.import('CoreServices');
+function run(argv) {
+    var device = Number(argv[0]);
+    if (!Number.isSafeInteger(device) || device <= 0) throw Error('Invalid device');
+    var eventId = Number($.FSEventsGetCurrentEventId());
+    if (!Number.isSafeInteger(eventId) || eventId <= 0) throw Error('Invalid event boundary');
+    if (!$.FSEventsPurgeEventsForDeviceUpToEventId(device, eventId)) {
+        throw Error('FSEvents service refused purge');
+    }
+}
+JXA
+}
+
+fsevents_purge_volume() {
+    local volume="$1" external="$2" info mount_point writable permissions fs device startup_device physical
+    [ ! -L "$volume" ] && [ -d "$volume" ] || return 0
+    guard_mutation_target "$volume" || return 0
+    if [ "$TEST_MODE" -eq 1 ]; then
+        # Fixture cleanup models scope only, not native API acceptance.
+        clear_dir_contents "$volume/.fseventsd"
+        return 0
+    fi
+    physical="$(cd "$volume" && pwd -P)" || return 0
+    if [ "$physical" != "$volume" ] || [ "$volume" = / ]; then
+        log_warn "refusing FSEvents mount alias: $volume"
+        FAILED_COUNT=$((FAILED_COUNT + 1)); return 0
+    fi
+    info="$(diskutil info -plist "$volume" 2>/dev/null)" || info=''
+    mount_point="$(printf '%s' "$info" | plutil -extract MountPoint raw -o - - 2>/dev/null)" || mount_point=''
+    writable="$(printf '%s' "$info" | plutil -extract WritableVolume raw -o - - 2>/dev/null)" || writable=''
+    permissions="$(printf '%s' "$info" | plutil -extract GlobalPermissionsEnabled raw -o - - 2>/dev/null)" || permissions=''
+    fs="$(printf '%s' "$info" | plutil -extract FilesystemType raw -o - - 2>/dev/null)" || fs=''
+    device="$(trash_stat_number %d "$volume")" || device=''
+    startup_device="$(trash_stat_number %d "$DATA_VOLUME")" || startup_device=''
+    if [ "$mount_point" != "$volume" ] || [ "$writable" != true ] || [ "$permissions" != true ] \
+        || { [ "$fs" != apfs ] && [ "$fs" != hfs ]; } \
+        || [ -z "$device" ] || [ "$device" = 0 ] \
+        || { [ "$external" -eq 1 ] && { [ -z "$startup_device" ] || [ "$device" = "$startup_device" ]; }; }; then
+        log_warn "refusing unverified, read-only, ownership-disabled or startup-alias FSEvents volume: $volume"
+        FAILED_COUNT=$((FAILED_COUNT + 1)); return 0
+    fi
+    if [ "$DRY_RUN" -eq 1 ]; then
+        log_debug "[DRY RUN] would ask CoreServices to purge FSEvents on $volume (device $device)"
+        CLEANED_COUNT=$((CLEANED_COUNT + 1)); return 0
+    fi
+    if fsevents_native_purge "$device" >/dev/null 2>&1; then
+        log_ok "FSEvents service accepted purge: $volume"
+        CLEANED_COUNT=$((CLEANED_COUNT + 1))
+    else
+        log_warn "FSEvents API unavailable or purge refused; cleanup not confirmed: $volume"
+        FAILED_COUNT=$((FAILED_COUNT + 1))
+    fi
+}
+
+module_fsevents() {
+    local volume
+    if [ -d "$DATA_VOLUME" ]; then
+        fsevents_purge_volume "$DATA_VOLUME" 0
+    elif [ "$TEST_MODE" -eq 1 ]; then
+        fsevents_purge_volume "$SANDBOX" 0
+    else
+        log_warn "startup Data volume unavailable; FSEvents purge refused"
+        FAILED_COUNT=$((FAILED_COUNT + 1))
     fi
     if [ "$INCLUDE_VOLUMES" -eq 1 ]; then
-        for vol in "$SANDBOX"/Volumes/*/; do
-            vol="${vol%/}"
-            [ -d "$vol" ] || continue
-            # Skip the startup/root mount itself.
-            [ "$vol" = "/" ] && continue
-            if [ -d "$vol/.fseventsd" ]; then
-                clear_dir_contents "$vol/.fseventsd"
-            fi
-        done
+        while read_find_path volume; do
+            fsevents_purge_volume "$volume" 1
+        done < <(find_checked "$SANDBOX/Volumes" -mindepth 1 -maxdepth 1 -type d -print0)
     fi
-    return 0
 }
 
 # --- module: usage -----------------------------------------------------------
@@ -3755,7 +3928,7 @@ module_finderhistory() {
 
 module_selected() {
     if [ -z "$SELECTED_MODULES" ]; then
-        case "$1" in clipboard|headless|slackexport|terminal|finderhistory) return 1 ;; *) return 0 ;; esac
+        case "$1" in fsevents|clipboard|headless|slackexport|terminal|finderhistory) return 1 ;; *) return 0 ;; esac
     fi
     case ",$SELECTED_MODULES," in
         *",$1,"*) return 0 ;;
@@ -3771,6 +3944,7 @@ run_module() {
         browser)     module_browser ;;
         unified)     module_unified ;;
         fileevents)  module_fileevents ;;
+        fsevents)    module_fsevents ;;
         usage)       module_usage ;;
         spotlight)   module_spotlight ;;
         quicklook)   module_quicklook ;;
@@ -3798,7 +3972,7 @@ run_selected_modules() {
     if [ -n "$SELECTED_MODULES" ]; then
         log_info "running modules: $(printf '%s' "$SELECTED_MODULES" | tr ',' ' ')"
     else
-        log_info "running modules: standard (clipboard, headless, slackexport, terminal and finderhistory require selection)"
+        log_info "running modules: standard (additional modules require explicit selection; see --list)"
     fi
     for id in "${MODULE_IDS[@]}"; do
         if module_selected "$id"; then
