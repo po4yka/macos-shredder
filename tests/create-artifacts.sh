@@ -159,19 +159,21 @@ build_user_home() { # build_user_home <home-dir>
   # Chromium-family profiles: Default plus a named profile. The second
   # profile catches implementations that only clean Default.
   local chrome="$home/Library/Application Support/Google/Chrome"
+  local chrome_cache="$home/Library/Caches/Google/Chrome"
   local profile
   for profile in Default 'Profile 1'; do
-    mkdir -p "$chrome/$profile/Cache"
+    mkdir -p "$chrome/$profile" "$chrome_cache/$profile/Cache"
     printf 'chrome history %s\n' "$MARK_HIST" > "$chrome/$profile/History"
-    printf 'chrome cache %s\n' "$MARK_OWN" > "$chrome/$profile/Cache/cache.data"
+    printf 'chrome cache %s\n' "$MARK_OWN" > "$chrome_cache/$profile/Cache/cache.data"
   done
 
   # Firefox profiles can have arbitrary names; they are not required to
   # contain "default".
   local firefox="$home/Library/Application Support/Firefox/Profiles/abcd1234.work"
-  mkdir -p "$firefox/cache2"
+  local firefox_cache="$home/Library/Caches/Firefox/Profiles/abcd1234.work"
+  mkdir -p "$firefox" "$firefox_cache/cache2"
   make_firefox_places_db "$firefox/places.sqlite"
-  printf 'firefox cache %s\n' "$MARK_OWN" > "$firefox/cache2/cache.data"
+  printf 'firefox cache %s\n' "$MARK_OWN" > "$firefox_cache/cache2/cache.data"
 
   # --- launch services quarantine ---------------------------------------------
   make_quarantine_db "$home/Library/Preferences/com.apple.LaunchServices.QuarantineEventsV2"

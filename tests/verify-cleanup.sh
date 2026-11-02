@@ -259,7 +259,7 @@ check_user_artifacts_cleaned() { # check_user_artifacts_cleaned <label> <home>
   check_firefox_places "$label: Firefox history cleared without bookmark loss" \
     "$home/Library/Application Support/Firefox/Profiles/abcd1234.work/places.sqlite"
   check_gone "$label: Firefox custom-profile cache gone" \
-    "$home/Library/Application Support/Firefox/Profiles/abcd1234.work/cache2/cache.data"
+    "$home/Library/Caches/Firefox/Profiles/abcd1234.work/cache2/cache.data"
 
   # Chromium profiles: both Default and named profiles are covered.
   if [ "$label" = 'user[User Space]' ]; then
@@ -268,7 +268,7 @@ check_user_artifacts_cleaned() { # check_user_artifacts_cleaned <label> <home>
     check_gone "$label: Chrome named-profile history gone" \
       "$home/Library/Application Support/Google/Chrome/Profile 1/History"
     check_gone "$label: Chrome named-profile cache gone" \
-      "$home/Library/Application Support/Google/Chrome/Profile 1/Cache/cache.data"
+      "$home/Library/Caches/Google/Chrome/Profile 1/Cache/cache.data"
   fi
 
   # launch services quarantine markers

@@ -1123,10 +1123,11 @@ clean_chrome_profile_caches() {
 
 clean_chrome_family_for_home() {
     local h="$1"
-    local label proc rel appdir prof
+    local label proc rel appdir prof cache_appdir
     while IFS='|' read -r label proc rel; do
         [ -n "$label" ] || continue
         appdir="$h/$rel"
+        cache_appdir="$h/Library/Caches/${rel#Library/Application Support/}"
         [ -d "$appdir" ] || continue
         if browser_running "$proc"; then
             log_warn "$label is running; skipping $label database deletion (data integrity)"
@@ -1142,6 +1143,7 @@ clean_chrome_family_for_home() {
             prof="${prof%/}"
             [ -d "$prof" ] || continue
             clean_chrome_profile_caches "$prof"
+            clean_chrome_profile_caches "$cache_appdir/${prof##*/}"
         done
     done <<'CHROME_BROWSERS'
 Google Chrome|Google Chrome|Library/Application Support/Google/Chrome
@@ -1219,6 +1221,7 @@ clean_firefox_for_home() {
         skip_dbs=1
     fi
     for prof in "$profiles"/*/; do
+        prof="${prof%/}"
         [ -d "$prof" ] || continue
         if [ "$skip_dbs" -eq 0 ]; then
             purge_firefox_history "$prof/places.sqlite"
@@ -1229,6 +1232,8 @@ clean_firefox_for_home() {
         fi
         clear_dir_contents "$prof/cache2"
         clear_dir_contents "$prof/thumbnails"
+        clear_dir_contents "$h/Library/Caches/Firefox/Profiles/${prof##*/}/cache2"
+        clear_dir_contents "$h/Library/Caches/Firefox/Profiles/${prof##*/}/thumbnails"
         clear_dir_contents "$prof/sessionstore-backups"
     done
     return 0

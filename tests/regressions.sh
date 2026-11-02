@@ -117,3 +117,22 @@ test_log_rotations() (
 )
 test_log_rotations
 printf 'PASS: numbered log rotations are removed; unrelated files survive\n'
+
+test_browser_cache_paths() (
+    setup_case browser-caches
+    local h="$USERS_DIR/User Space" product
+    for product in Google/Chrome Chromium 'Microsoft Edge' BraveSoftware/Brave-Browser; do
+        mkdir -p "$h/Library/Application Support/$product/Profile 1"
+        mkdir -p "$h/Library/Caches/$product/Profile 1/Cache"
+        printf 'cache trace\n' > "$h/Library/Caches/$product/Profile 1/Cache/entry"
+    done
+    mkdir -p "$h/Library/Application Support/Firefox/Profiles/custom"
+    mkdir -p "$h/Library/Caches/Firefox/Profiles/custom/cache2"
+    printf 'cache trace\n' > "$h/Library/Caches/Firefox/Profiles/custom/cache2/entry"
+    /bin/bash "$SHREDDER" --dry-run --modules browser >/dev/null 2>&1
+    [ "$(find "$h/Library/Caches" -type f | wc -l | tr -d ' ')" -eq 5 ]
+    /bin/bash "$SHREDDER" --force --modules browser >/dev/null 2>&1
+    [ -z "$(find "$h/Library/Caches" -type f -print)" ]
+)
+test_browser_cache_paths
+printf 'PASS: macOS cache paths for all supported browsers are cleared\n'
