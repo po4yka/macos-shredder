@@ -690,6 +690,9 @@ parse_args() {
                 if [ $# -lt 2 ]; then
                     usage_error "option '$1' requires an argument"
                 fi
+                if [ -z "$2" ]; then
+                    usage_error "option '$1' requires a non-empty argument"
+                fi
                 MODULES_ARG="$2"
                 shift 2
                 ;;

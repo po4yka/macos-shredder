@@ -73,6 +73,7 @@ RES_M='FAIL'
 
 phase_a_usage_validation() {
   local sb="$WORK/sandbox-a" log="$WORK/phase-a.log" rc=0 ok=1
+  local option value
   mkdir -p "$sb"
   info 'running: SHREDDER_ROOT=<sandbox> bash shredder.sh --modules bogus_definitely_invalid'
   SHREDDER_ROOT="$sb" bash "$SHREDDER" --modules bogus_definitely_invalid >"$log" 2>&1 || rc=$?
@@ -86,6 +87,23 @@ phase_a_usage_validation() {
     info 'output mentions a valid module id (trash): NO'
     ok=0
   fi
+  # An explicitly empty selection must never fall back to all modules.
+  : > "$sb/.macos-shredder-test-root"
+  mkdir -p "$sb/Users/alice/.Trash"
+  printf 'preserve history\n' > "$sb/Users/alice/.zsh_history"
+  printf 'preserve trash\n' > "$sb/Users/alice/.Trash/sentinel"
+  for option in -m --modules; do
+    for value in '' '   '; do
+      rc=0
+      SHREDDER_ROOT="$sb" bash "$SHREDDER" --force "$option" "$value" >"$log" 2>&1 || rc=$?
+      [ "$rc" -eq 64 ] || ok=0
+      grep -q '^preserve history$' "$sb/Users/alice/.zsh_history" || ok=0
+      grep -q '^preserve trash$' "$sb/Users/alice/.Trash/sentinel" || ok=0
+    done
+  done
+  rc=0
+  SHREDDER_ROOT="$sb" bash "$SHREDDER" --force --modules= >"$log" 2>&1 || rc=$?
+  [ "$rc" -eq 64 ] || ok=0
   [ "$ok" -eq 1 ]
 }
 
