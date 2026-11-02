@@ -160,6 +160,7 @@ recording, and shell history can independently retain records of a run.
 | `mailhistory` | Explicit; manual | Mail recipients and attachments; instructions only, real runs report incomplete |
 | `locationhistory` | Explicit; manual | Maps searches and significant locations; instructions only, real runs report incomplete |
 | `callhistory` | Explicit; manual | Phone and FaceTime call history; instructions only, real runs report incomplete |
+| `messagehistory` | Explicit; manual | Messages and recently deleted attachments; instructions only, real runs report incomplete |
 
 Mounted volumes are excluded by default. Use `--include-volumes` to include
 their FSEvents, `.DS_Store` data, and per-user Trash in the corresponding
@@ -557,6 +558,18 @@ buttons, change permissions, or mutate these stores. [Official instructions](htt
 A real run reports exit `2` and does not add cleaned items. A dry-run prints
 the guidance and normally returns `0`. The script does not open apps, click
 buttons, change permissions, or mutate these stores. [Official instructions](https://support.apple.com/en-asia/guide/phoneapp/phn33a31c85/mac).
+
+### Messages and recently deleted attachments
+
+`messagehistory` is an explicit manual workflow. Message and attachment deletion can propagate through Messages in iCloud. Recently Deleted is a separate stage. The module explains both stages and preserves all databases and settings; it does not claim to remove recipient copies.
+
+```sh
+./shredder.sh --modules messagehistory --dry-run
+```
+
+A real run reports exit `2` and does not add cleaned items. A dry-run prints
+the guidance and normally returns `0`. The script does not open apps, click
+buttons, change permissions, or mutate these stores. [Official instructions](https://support.apple.com/en-euro/guide/messages/icht1035/26.0/mac/27).
 
 ## Browser site data and tab recovery
 

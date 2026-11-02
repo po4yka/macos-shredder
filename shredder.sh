@@ -130,6 +130,7 @@ MODULE_IDS=(
     mailhistory
     locationhistory
     callhistory
+    messagehistory
 )
 MODULE_DESCS=(
     "Shell and REPL histories, session data"
@@ -162,6 +163,7 @@ MODULE_DESCS=(
     "Mail recipients and attachments (manual action required)"
     "Maps searches and significant locations (manual action required)"
     "Phone and FaceTime call history (manual action required)"
+    "Messages and recently deleted attachments (manual action required)"
 )
 
 # Color codes; filled by setup_colors(), left empty when colors are disabled.
@@ -4236,9 +4238,22 @@ module_callhistory() {
     return 0
 }
 
+
+# Explicit guidance: no verified automatic backend for this private store.
+module_messagehistory() {
+    log_warn 'messagehistory: manual action required; no automatic cleanup was performed.'
+    log_warn 'messagehistory: Messages: select messages or attachments, press Delete, then confirm. Use View > Recently Deleted to permanently delete selected recently deleted conversations.'
+    log_warn 'messagehistory: With Messages in iCloud enabled, deletion applies to your other devices with Messages in iCloud enabled. It does not delete recipients copies.'
+    log_warn 'messagehistory: Messages > Settings > General > Keep messages changes future automatic retention; review it separately from one-time deletion.'
+    log_warn 'messagehistory: No Messages database, attachment, conversation, sync setting or retention setting was changed.'
+    log_info 'messagehistory: official instructions: https://support.apple.com/en-euro/guide/messages/icht1035/26.0/mac/27'
+    [ "$DRY_RUN" -eq 1 ] || FAILED_COUNT=$((FAILED_COUNT + 1))
+    return 0
+}
+
 module_selected() {
     if [ -z "$SELECTED_MODULES" ]; then
-        case "$1" in fsevents|clipboard|headless|slackexport|terminal|finderhistory|filemetadata|documentversions|notifications|activity|siri|mailhistory|locationhistory|callhistory) return 1 ;; *) return 0 ;; esac
+        case "$1" in fsevents|clipboard|headless|slackexport|terminal|finderhistory|filemetadata|documentversions|notifications|activity|siri|mailhistory|locationhistory|callhistory|messagehistory) return 1 ;; *) return 0 ;; esac
     fi
     case ",$SELECTED_MODULES," in
         *",$1,"*) return 0 ;;
@@ -4278,6 +4293,7 @@ run_module() {
         mailhistory) module_mailhistory ;;
         locationhistory) module_locationhistory ;;
         callhistory) module_callhistory ;;
+        messagehistory) module_messagehistory ;;
         *)
             log_warn "unknown module id in dispatch: $1"
             ;;
