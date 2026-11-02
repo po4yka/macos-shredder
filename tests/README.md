@@ -253,3 +253,7 @@ creates an `NSFileVersion` only for a synthetic document in a marked temporary
 fixture, removes that version through the native coordinated API, and checks
 that current contents stay unchanged. On other systems it uses a native-boundary
 double and reports that the native check is unavailable.
+
+`manual-privacy.sh` checks explicit selection, manual-action notices, zero
+cleaned items, real exit `2`, dry-run exit `0`, and fixture preservation for
+manual privacy workflows. It never opens apps or performs their actions.

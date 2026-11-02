@@ -157,6 +157,7 @@ recording, and shell history can independently retain records of a run.
 | `notifications` | Explicit | Known delivered Notification Center history |
 | `activity` | Explicit | Known KnowledgeC and IntelligencePlatform event/feedback tables; reports unsupported stores |
 | `siri` | Explicit; manual | Manual Siri/Dictation deletion instructions; real runs report incomplete |
+| `mailhistory` | Explicit; manual | Mail recipients and attachments; instructions only, real runs report incomplete |
 
 Mounted volumes are excluded by default. Use `--include-volumes` to include
 their FSEvents, `.DS_Store` data, and per-user Trash in the corresponding
@@ -518,6 +519,18 @@ This is not a universal copy-history reset. File contents, other copies,
 Spotlight indexes and backups can still contain origin information. See Apple's
 [`kMDItemWhereFroms` reference](https://developer.apple.com/documentation/coreservices/kmditemwherefroms)
 and the native `xattr(1)` manual for the attribute and tool behavior.
+
+### Mail recipients and attachments
+
+`mailhistory` is an explicit manual workflow. Mail recipient suggestions and attachment copies have different deletion scopes. Previous Recipients can sync through iCloud Contacts; Remove Attachments for IMAP also removes server attachments. The module gives these distinctions and the supported app actions. It does not delete the Mail data root.
+
+```sh
+./shredder.sh --modules mailhistory --dry-run
+```
+
+A real run reports exit `2` and does not add cleaned items. A dry-run prints
+the guidance and normally returns `0`. The script does not open apps, click
+buttons, change permissions, or mutate these stores. [Official instructions](https://support.apple.com/guide/mail/remove-obsolete-email-addresses-mlhlp1113/mac).
 
 ## Browser site data and tab recovery
 

@@ -127,6 +127,7 @@ MODULE_IDS=(
     notifications
     activity
     siri
+    mailhistory
 )
 MODULE_DESCS=(
     "Shell and REPL histories, session data"
@@ -156,6 +157,7 @@ MODULE_DESCS=(
     "Delivered notification history (explicit selection only)"
     "Known activity stores; reports unsupported stores (explicit only)"
     "Siri and Dictation deletion instructions (manual action required)"
+    "Mail recipients and attachments (manual action required)"
 )
 
 # Color codes; filled by setup_colors(), left empty when colors are disabled.
@@ -766,6 +768,8 @@ Scope:
   A dry-run does not validate mixed SQLite schemas or prove secure erasure.
   notifications/activity require offline stores; siri prints manual steps.
   Unsupported activity stores remain intact and real runs report exit 2.
+  Modules labelled manual action required only print guidance and report
+  incomplete cleanup on real runs; use --dry-run to read their instructions.
 
 Environment:
   SHREDDER_ROOT         When set, every filesystem target is rooted under this
@@ -4190,9 +4194,21 @@ module_siri() {
     return 0
 }
 
+# Explicit guidance: no verified automatic backend for this private store.
+module_mailhistory() {
+    log_warn 'mailhistory: manual action required; no automatic cleanup was performed.'
+    log_warn 'mailhistory: Mail > Window > Previous Recipients: select addresses, then Remove From List. This list can sync through iCloud Contacts.'
+    log_warn 'mailhistory: Mail attachments: select messages, then Message > Remove Attachments. For IMAP accounts this also deletes attachments from the mail server.'
+    log_warn 'mailhistory: Mail > Settings > General > Remove unedited downloads controls temporary attachment copies; saved attachments remain.'
+    log_warn 'mailhistory: No Mail database, message, attachment, address or account was changed.'
+    log_info 'mailhistory: official instructions: https://support.apple.com/guide/mail/remove-obsolete-email-addresses-mlhlp1113/mac'
+    [ "$DRY_RUN" -eq 1 ] || FAILED_COUNT=$((FAILED_COUNT + 1))
+    return 0
+}
+
 module_selected() {
     if [ -z "$SELECTED_MODULES" ]; then
-        case "$1" in fsevents|clipboard|headless|slackexport|terminal|finderhistory|filemetadata|documentversions|notifications|activity|siri) return 1 ;; *) return 0 ;; esac
+        case "$1" in fsevents|clipboard|headless|slackexport|terminal|finderhistory|filemetadata|documentversions|notifications|activity|siri|mailhistory) return 1 ;; *) return 0 ;; esac
     fi
     case ",$SELECTED_MODULES," in
         *",$1,"*) return 0 ;;
@@ -4229,6 +4245,7 @@ run_module() {
         notifications) module_notifications ;;
         activity)    module_activity ;;
         siri)        module_siri ;;
+        mailhistory) module_mailhistory ;;
         *)
             log_warn "unknown module id in dispatch: $1"
             ;;
