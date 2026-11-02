@@ -775,16 +775,24 @@ buttons, change permissions, or mutate these stores. [Official instructions](htt
 
 ## Browser site data and tab recovery
 
-The `browser` module removes site cookies and local tab-recovery files. This
-signs you out of websites and can remove offline site files and unfinished
-forms. Browser bookmarks, saved passwords, preferences, and separate extension
-settings stores remain. Browser sync and cloud copies are not cleared.
+The `browser` module removes browsing history, site cookies and local
+tab-recovery files. This signs you out of websites and can remove offline site
+files and unfinished forms. Browser bookmarks, saved passwords, preferences,
+and separate extension settings stores remain. Browser sync and cloud copies
+are not cleared.
+
+Chromium browsers keep autofill entries, saved addresses, saved payment
+cards, custom search engines and account sign-in tokens in the same `Web Data`
+database. The module removes that complete database. Export or sync the data
+that you want to keep before you run the module, and expect to sign in to the
+browser again. Firefox `formhistory.sqlite` (saved form entries) is also
+removed.
 
 | Browser | Additional scope |
 | --- | --- |
-| Chrome, Chromium, Edge, Brave | `Network/Cookies`, device-bound site sessions, `Sessions` and `Sessions_Encrypted`, legacy current/last session and tab files, and HTTP(S)/file origin IndexedDB stores; default, numbered, and guest profiles |
-| Firefox | HTTP(S)/file origin directories in default, temporary, permanent, and legacy persistent storage; these hold IndexedDB, local storage, cache storage, and related site files. Known legacy SQLite local-storage tables and quota-cache metadata are filtered by origin. Current and legacy session files and recovery backups are removed |
-| Safari | Legacy session and recently closed tab files, saved application state, container cookies, and cookies in named WebKit data stores |
+| Chrome, Chromium, Edge, Brave | `History`, `Top Sites`, `Web Data` (see above), `Cookies` and `Network/Cookies`, device-bound site sessions, `Sessions` and `Sessions_Encrypted`, legacy current/last session and tab files, and HTTP(S)/file origin IndexedDB stores; default, numbered, and guest profiles |
+| Firefox | Visits, typed input and unbookmarked URLs in `places.sqlite` (bookmarks stay), `cookies.sqlite`, `formhistory.sqlite`, and HTTP(S)/file origin directories in default, temporary, permanent, and legacy persistent storage; these hold IndexedDB, local storage, cache storage, and related site files. Known legacy SQLite local-storage tables and quota-cache metadata are filtered by origin. Current and legacy session files and recovery backups are removed |
+| Safari | `History.db`, `Downloads.plist`, `TopSites.plist`, legacy session and recently closed tab files, saved application state, container cookies, and cookies in named WebKit data stores |
 
 Some stores combine website data with extension data. By default, those stores
 remain and the run exits `2` with their paths. Use the following explicit option
