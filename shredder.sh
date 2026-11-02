@@ -12,15 +12,21 @@
 #   store, quarantine/FSEvents artifacts, usage databases, Spotlight
 #   indexes, Quick Look caches, Trash contents, .DS_Store files, Wi-Fi
 #   network reminders, package-manager caches and application leftovers.
-#   Optional scopes include mounted-volume Trash, shared browser extension
-#   data, AI-derived artifacts and local Time Machine snapshots.
+#   The standard selection contains 16 modules. Ten additional module IDs
+#   require explicit selection: FSEvents, clipboard, Headless profiles, Slack
+#   exports, terminal output, Finder history, file-origin metadata,
+#   notifications, activity stores and manual Siri deletion guidance.
+#   Flags add mounted-volume targets, shared browser extension data,
+#   extended/derived AI data, cmux sessions and local Time Machine snapshots.
+#   See README.md for retained stores and incomplete-cleanup behavior.
 #
 # Testability (sandbox mode):
 #   Create .macos-shredder-test-root in a sandbox, then export
 #   SHREDDER_ROOT=/path/to/sandbox to root EVERY filesystem target there.
 #   In that mode the root-privilege check, Darwin OS check and Full Disk
-#   Access probe are skipped. Host cleanup commands are skipped or replaced
-#   by sandbox operations. Required tools and unsafe data can still cause
+#   Access probe are skipped. System-wide cleanup commands are skipped or
+#   replaced by sandbox operations. Native plist/xattr tools can still act
+#   on marked fixture files. Required tools and unsafe data can still cause
 #   failures; sandbox mode does not imply that every operation will succeed.
 #
 # Exit codes:

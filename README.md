@@ -1,11 +1,25 @@
 # macOS Shredder
 
 `macos-shredder` is a macOS-only cleanup script for shell and editor histories,
-local AI sessions, browser site data and tab recovery, logs, usage databases,
-caches, and Trash.
+local AI sessions, browser site data and tab recovery, logs, activity databases,
+caches, and Trash. Explicit options also cover clipboard history, local Slack
+exports, terminal output, Finder history, and selected file-origin metadata.
+Siri deletion is a manual workflow; the script only prints instructions.
 
 > Warning: this program deletes data. Run a dry-run first. Use it only on a
 > Mac that you own or administer.
+
+## Contents
+
+- [Quick start and options](#quick-start)
+- [Modules and system cleanup](#modules)
+- [Additional cleanup scopes](#additional-cleanup-scopes)
+- [Browser site data and tab recovery](#browser-site-data-and-tab-recovery)
+- [Shell history stores](#shell-history-stores)
+- [Editor history](#editor-history)
+- [AI sessions and custom locations](#ai-sessions)
+- [Results and incomplete cleanup](#results-and-incomplete-cleanup)
+- [Tests](#tests)
 
 ## Important limits
 
@@ -32,25 +46,33 @@ chmod +x shredder.sh
 # Inspect the available modules.
 ./shredder.sh --list
 
-# Preview all operations. This does not require root.
+# Preview the standard modules. This does not require root.
 ./shredder.sh --dry-run --debug
 
 # Run selected modules after you inspect the preview.
 sudo ./shredder.sh --modules shell,browser,trash --force
 ```
 
-Without `--modules`, the script runs the 16 standard modules, including `ai`
-and `editors`. Additional modules marked as explicit in the table below
-require explicit selection. Modules run in the order listed below, regardless of the order in
-`--modules`. Without `--force`, a real run asks for confirmation. `--force`
-only skips that prompt; it does not bypass process, path, or database checks.
+There are 26 module IDs: 16 standard modules and 10 that require explicit
+selection. Without `--modules`, the script runs the standard modules, including
+`ai` and `editors`. Supplying `--modules` replaces that standard selection.
+There is no `all` module ID. Modules run in registry order, shown in the table
+below, regardless of the order in `--modules`. Without `--force`, a real run
+asks for confirmation. `--force` only skips that prompt; it does not bypass process, path, or database checks.
 
 Real cleanup requires macOS, Bash 3.2 or later, root privileges, and access to
 the selected files. Mixed database and JSON cleanup requires `sqlite3` with
 JSON support. The script uses the system command paths during a real run;
 installing a different SQLite on the caller's `PATH` does not replace the
 system binary. Dry-run does not require root, but limited read access can
-prevent it from discovering all targets.
+prevent it from discovering all targets. `--help`, `--version`, and `--list`
+are available without a cleanup run.
+
+Store-specific operations also use native macOS tools: `defaults` and `plutil`
+for Finder preferences, `xattr` for file metadata, `osascript` with CoreServices
+for FSEvents, and `lsof` for open-file checks. No compiler or Python runtime is
+required for cleanup. Missing required tools can produce exit `2`; the script
+does not install them.
 
 Per-user modules process eligible homes under `/Users`, not just the invoking
 user's home. Linked homes are excluded. Directory Services supplies users on
@@ -71,7 +93,7 @@ home directories. There is no single-user selection option.
 | `--logfile FILE` | Create a private operation log after confirmation |
 | `--include-volumes` | Include mounted-volume targets in the selected `trash`, `fsevents`, and `dsstore` modules |
 | `--include-extension-data` | Allow `browser` to remove shared website/extension storage; this can reset extension settings and sign-ins |
-| `--logs-older-than N` | Remove only closed legacy log rotations and diagnostic reports older than N days in `systemlogs`/`audit`; rejects `unified` |
+| `--logs-older-than N` | Remove eligible closed legacy rotations, diagnostic reports, and BSM trails older than N days; requires `systemlogs` or `audit` and rejects `unified` |
 | `--purge-snapshots` | Delete local Time Machine snapshots before the selected modules run |
 | `--ai-derived` | Include supported memory, plans, and generated artifacts in `ai` cleanup |
 | `--ai-extended` | Include supported Gemini, Antigravity, desktop AI, context-mode, and Serena traces in `ai` cleanup |
@@ -83,6 +105,14 @@ home directories. There is no single-user selection option.
 | `--slack-export-root PATH` | Select a local Slack export directory; repeatable and required with `--modules slackexport` |
 | `--metadata-file PATH` | Select one file for origin metadata cleanup; repeatable, requires `filemetadata` |
 | `--ai-root KIND=PATH` | Add a custom AI storage location; repeat for multiple roots |
+
+Module-specific flags do not select their module. For example, use
+`--modules shell --terminal-sessions` or `--modules clipboard --clipboard-current`.
+`slackexport` and `filemetadata` require at least one explicit path. Conversely,
+`--slack-export-root`, `--metadata-file`, and `--terminal-log-file` are rejected
+unless their module is selected. Quote paths that contain spaces. The examples
+use placeholder `/Users/alice/...` paths; replace them with actual targets.
+Age arguments accept integers from 1 through 99999, without leading zeroes.
 
 The scope-expansion flags are off by default. `--ai-root` is additive;
 it does not restrict cleanup to the supplied path. `--purge-snapshots` runs
@@ -97,39 +127,64 @@ Dry-run and `--list` do not create logs.
 
 ## Modules
 
-| Module | Scope |
-| --- | --- |
-| `shell` | Shell and REPL histories, Atuin history, and directory jump stores |
-| `systemlogs` | Legacy system logs and diagnostic reports |
-| `audit` | Existing BSM audit trail files; BSM is legacy on current macOS |
-| `browser` | Safari, Chrome-family, and Firefox histories, site data, tab recovery, and caches |
-| `unified` | Apple unified logging store |
-| `fileevents` | Quarantine download event databases |
-| `fsevents` | Per-volume FSEvents history through CoreServices; explicit selection only |
-| `usage` | Known KnowledgeC event tables and recent items |
-| `spotlight` | Spotlight erase-and-rebuild operation |
-| `quicklook` | Per-user Quick Look caches |
-| `trash` | Per-user Trash contents, including hidden files; mounted-volume Trash with `--include-volumes` |
-| `dsstore` | `.DS_Store` files in user homes |
-| `wifi` | Remembered Wi-Fi preference files and Wi-Fi logs |
-| `brew` | Homebrew caches and logs |
-| `apps` | Selected editor caches and logs |
-| `editors` | VS Code-family and JetBrains local history; Vim/Neovim persistent history |
-| `ai` | Local sessions for Claude Code, Codex, OpenCode, Cursor, Windsurf, Continue, Cline/Roo, and Aider |
-| `clipboard` | Known Maccy clipboard history; explicit selection only |
-| `headless` | Old, unlocked Chrome Headless temporary profiles; explicit selection only |
-| `slackexport` | Known data in explicitly selected local Slack exports; explicit selection only |
-| `terminal` | Terminal/iTerm2 saved output and explicitly selected session logs; explicit selection only |
-| `finderhistory` | Known Finder and Open/Save history keys; explicit selection only |
-| `filemetadata` | Origin metadata on explicitly selected files; explicit selection only |
-| `notifications` | Known delivered Notification Center history; explicit selection only |
-| `activity` | Known KnowledgeC and IntelligencePlatform event/feedback tables; reports unsupported stores; explicit selection only |
-| `siri` | Manual Siri/Dictation deletion instructions; real runs report incomplete; explicit selection only |
+| Module | Selection | Scope |
+| --- | --- | --- |
+| `shell` | Standard | Shell and REPL histories, Atuin history, and directory jump stores |
+| `systemlogs` | Standard | Legacy system logs and diagnostic reports |
+| `audit` | Standard | Existing BSM audit trail files; BSM is legacy on current macOS |
+| `browser` | Standard | Safari, Chrome-family, and Firefox histories, site data, tab recovery, and caches |
+| `unified` | Standard | Apple unified logging store |
+| `fileevents` | Standard | Quarantine download event databases |
+| `fsevents` | Explicit | Per-volume FSEvents history through CoreServices |
+| `usage` | Standard | Known KnowledgeC event tables and recent items |
+| `spotlight` | Standard | Spotlight erase-and-rebuild operation |
+| `quicklook` | Standard | Per-user Quick Look caches |
+| `trash` | Standard | Per-user Trash contents, including hidden files; mounted-volume Trash with `--include-volumes` |
+| `dsstore` | Standard | `.DS_Store` files in user homes |
+| `wifi` | Standard | Remembered Wi-Fi preference files and Wi-Fi logs |
+| `brew` | Standard | Homebrew caches and logs |
+| `apps` | Standard | Selected editor caches and logs |
+| `editors` | Standard | VS Code-family and JetBrains local history; Vim/Neovim persistent history |
+| `ai` | Standard | Local sessions for Claude Code, Codex, OpenCode, Cursor, Windsurf, Continue, Cline/Roo, and Aider |
+| `clipboard` | Explicit | Known Maccy clipboard history |
+| `headless` | Explicit | Old, unlocked Chrome Headless temporary profiles |
+| `slackexport` | Explicit | Known data in explicitly selected local Slack exports |
+| `terminal` | Explicit | Terminal/iTerm2 saved output and explicitly selected session logs |
+| `finderhistory` | Explicit | Known Finder and Open/Save history keys |
+| `filemetadata` | Explicit | Origin metadata on explicitly selected files |
+| `notifications` | Explicit | Known delivered Notification Center history |
+| `activity` | Explicit | Known KnowledgeC and IntelligencePlatform event/feedback tables; reports unsupported stores |
+| `siri` | Explicit; manual | Manual Siri/Dictation deletion instructions; real runs report incomplete |
 
 Mounted volumes are excluded by default. Use `--include-volumes` to include
 their FSEvents, `.DS_Store` data, and per-user Trash in the corresponding
 selected modules. Use `--purge-snapshots` only when you also want to delete
 local Time Machine snapshots.
+
+### Standard system cleanup
+
+A standard run includes broad system operations. Select only the modules you
+need after you inspect their preview:
+
+- `systemlogs` without an age filter truncates the known current legacy logs
+  and `fsck*` files, removes numbered rotations, and clears the selected
+  launchd, power-management, and diagnostic-report directories.
+- `audit` without an age filter can rotate an enabled BSM audit trail before
+  removing timestamped files. It retains the current trail target.
+- `unified` requests `log erase --all`. It does not stop future logging.
+- `fileevents` clears quarantine event records and can restart `lsd` before
+  database cleanup. This does not remove quarantine attributes from files.
+- `usage` clears supported KnowledgeC event tables, the recent-items domain,
+  top-level `*Recent*.sfl*` lists, and known per-application recent-document
+  lists. KnowledgeC uses the same offline-store checks as `activity`.
+- `spotlight` requests an index erase and rebuild. `quicklook` resets user
+  preview caches and removes known thumbnail-cache contents. Both kinds of
+  data can be created again.
+- `wifi` removes known network preference files and Wi-Fi logs. This can
+  affect remembered networks. `brew` clears Homebrew caches and logs; `apps`
+  clears selected VS Code caches/logs and JetBrains logs.
+- `trash` empties user Trash. `dsstore` removes `.DS_Store` files found under
+  eligible homes. Mounted volumes require `--include-volumes`.
 
 ### Log retention and FSEvents
 
@@ -169,7 +224,10 @@ does not prove removal of every physical copy; new events can appear at once,
 and backup/index clients can need a full rescan. See the installed macOS
 `FSEvents.h` API contract and `man log` for the native operation boundaries.
 
-`--purge-snapshots` covers existing local Time Machine snapshots. It does not
+`--purge-snapshots` enumerates local Time Machine snapshots and asks `diskutil`
+to delete each recognized snapshot. If `diskutil` is unavailable, it requests
+aggressive thinning through `tmutil`. This fallback is a request to reclaim
+space, not confirmation that every snapshot was removed. The flag does not
 delete Time Machine backup sets on external/network destinations, APFS
 snapshots from other tools, or cloud backup history.
 
@@ -204,6 +262,12 @@ These examples only preview operations:
 ./shredder.sh --modules slackexport --slack-export-root /Users/alice/slack_dump --dry-run --debug
 ```
 
+See also [terminal output](#terminal-saved-output-and-log-files),
+[Finder history](#finder-and-opensave-history),
+[file-origin metadata](#selected-file-origin-metadata),
+[notification/activity stores](#notification-and-activity-history), and
+[Siri instructions](#siri-and-dictation).
+
 ### Maccy clipboard history
 
 `clipboard` clears known history rows in Maccy's `Storage.sqlite`, both in
@@ -235,7 +299,9 @@ and its background processes first; a failed process query blocks this scope.
 
 `usage` also clears `.sfl2`, `.sfl3`, and `.sfl4` files immediately within
 `com.apple.sharedfilelist/com.apple.LSSharedFileList.ApplicationRecentDocuments`.
-Favorites, unknown formats, and nested directories remain.
+Within that per-application directory, favorites, unknown formats, and nested
+directories remain. The top-level recent-list pattern is broader, as described
+in [standard system cleanup](#standard-system-cleanup).
 
 ### Extended local AI traces
 
@@ -314,6 +380,8 @@ operates on the calling app's notifications only.
 
 `siri` gives the supported manual action and never claims automatic cleanup.
 A real run returns exit `2` with zero items counted as cleaned by this module.
+A dry-run prints the same instructions, counts no cleaned items, and normally
+returns `0`. Use `./shredder.sh --modules siri --dry-run` to read the guidance.
 Follow [Apple's Siri and Dictation history instructions](https://support.apple.com/en-bn/guide/mac-help/mchlf55961c0/mac):
 open **System Settings > Apple Intelligence & Siri** (or **Siri**), select
 **Delete Siri & Dictation History**, then confirm **Delete**. Internet access
@@ -330,7 +398,9 @@ change sharing preferences, or remove Siri configuration files.
 `headless` checks only `Library/Application Support/Google/Chrome-headless`
 inside each eligible home. A candidate must be named `scoped_dir` followed
 by letters or digits and contain the known `Default` and `Local State` paths.
-The profile and its descendants must have no changes within `--headless-days`.
+The profile and its descendants must have no modification times within
+`--headless-days`. Age checks use `find -mtime` day intervals, not creation
+time or dates inside browser records.
 Profiles with a singleton lock or socket are retained and reported. Close
 browsers and browser automation before cleanup and keep them closed until it
 finishes. Failed process queries block cleanup. Symlink targets and nested
@@ -353,8 +423,7 @@ top-level user/channel export files. The selected workspace uses
 `archive/__avatars`, and `snapshots/slackdump_YYYYMMDD_HHMMSS.sqlite`.
 SQLite `-wal`, `-shm`, and `-journal` sidecars are included. Top-level export
 names are `users-T<workspace ID>.json` and `channels-T<workspace ID>.txt`.
-It preserves scripts, programs, settings,
-locks, and monitoring tools. ZIP/TXT-only exports and arbitrary renamed copies
+It preserves scripts, programs, settings, locks, and monitoring tools. ZIP/TXT-only exports and arbitrary renamed copies
 are outside this scope.
 
 After a standard JSON export's metadata is removed, remaining empty channel
@@ -365,13 +434,88 @@ empty archive/media layout is retained for repeated cleanup.
 Stop exporters and scheduled sync jobs before cleanup. The script refuses an
 active exporter, a failed process query, or a `.lock` entry at the selected
 root. A real run also requires `lsof` to confirm that archive databases and
-their sidecars are not open. It
-does not stop jobs, remove locks, revoke credentials, or delete Slack cloud
+their sidecars are not open. It does not stop jobs, remove locks, revoke credentials, or delete Slack cloud
 data. A later export can recreate local data. As with other modules, failures
 can leave a partially cleaned export; exit `2` reports incomplete cleanup.
 
 Format references: [Slack JSON exports](https://slack.com/help/articles/220556107-How-to-read-Slack-data-exports)
 and [Slackdump](https://github.com/rusq/slackdump).
+
+### Terminal saved output and log files
+
+Select `--modules terminal` to remove Apple Terminal and iTerm2 saved window
+state, including iTerm2 `~/Library/Application Support/iTerm2/SavedState`.
+This removes persisted scrollback and recovery state. Close Terminal, iTerm2
+and their restoration servers first. The module refuses writes if a client
+is running or the process query fails. It does not terminate sessions.
+
+Session logs can be stored anywhere selected in the terminal profile. They
+are not discovered automatically. Use repeatable `--terminal-log-file` paths
+to select exact regular files below an eligible `/Users/<user>/` home.
+Directories, links and files that are open are refused. Example:
+
+```bash
+./shredder.sh --modules terminal --terminal-log-file /Users/alice/logs/session.txt --dry-run --debug
+```
+
+Terminal preferences, profiles, iTerm2 arrangements, session archives, shell
+history and unsaved documents are retained. Shell history and cmux history
+have separate options. This module does not clear live scrollback or prove
+that APFS snapshots, backups or external log copies have been erased.
+
+The scope follows the [iTerm2 restoration implementation](https://github.com/gnachman/iTerm2/blob/master/sources/StateRestoration/iTermRestorableStateController.m),
+[session restoration documentation](https://iterm2.com/documentation-restoration.html)
+and [session logging settings](https://iterm2.com/documentation-preferences-profiles-session.html).
+
+### Finder and Open/Save history
+
+`--modules finderhistory` clears only these keys in
+`~/Library/Preferences/com.apple.finder.plist`: `FXRecentFolders`,
+`GoToFieldHistory`, `GoToField`, `FXConnectToLastURL`,
+`RecentMoveAndCopyDestinations` and `RecentSearches`. It also clears
+`NSNavRecentPlaces` in `.GlobalPreferences.plist` and in the
+`com.apple.appkit.xpc.openAndSavePanelService.plist` preferences, including
+the service container under `~/Library/Containers/`.
+
+Quit Finder and close Open/Save dialogs before cleanup. A running Finder or
+panel service, or a failed process query, blocks writes. The module does not
+quit applications for you. Close other applications that may retain recent
+places in memory; they can write history again later.
+
+Only supported string or array values are removed with native macOS
+`defaults delete <plist-path> <key>`. Unknown keys, favorites, desktop icon
+positions, window settings and unsaved documents remain. A malformed plist,
+unexpected history type, link or wrong owner blocks that file. The module
+does not remove the whole preferences file or reset system preferences.
+A dry-run lists candidate files without validating their contents.
+
+Other application-specific Open/Save histories and renamed or future keys
+are outside this allowlist. Use `usage` for shared recent-document lists.
+These paths and key meanings are described in the
+[JPCERT macOS forensics workshop, page 106](https://jsac.jpcert.or.jp/archive/2022/pdf/JSAC2022_workshop_macOS-forensic_en.pdf).
+The Finder key names were also checked against the installed Finder executable.
+
+### Selected file origin metadata
+
+`filemetadata` requires one or more `--metadata-file /Users/<user>/path`
+arguments. It clears only `com.apple.metadata:kMDItemWhereFroms`, which can
+contain a download URL or sender information. It does not search directories
+or delete file content. For example:
+
+```sh
+./shredder.sh --modules filemetadata --metadata-file /Users/alice/Downloads/report.pdf --dry-run --debug
+```
+
+The file must be a regular file in an eligible home. Linked paths, hard links,
+directories and missing targets are refused. The module uses the home owner's
+identity and the native `xattr` tool. It reads attribute names, not values.
+Other attributes, including quarantine, Finder tags and comments, are retained.
+Filesystem metadata change times can change when an attribute is removed.
+
+This is not a universal copy-history reset. File contents, other copies,
+Spotlight indexes and backups can still contain origin information. See Apple's
+[`kMDItemWhereFroms` reference](https://developer.apple.com/documentation/coreservices/kmditemwherefroms)
+and the native `xattr(1)` manual for the attribute and tool behavior.
 
 ## Browser site data and tab recovery
 
@@ -422,7 +566,13 @@ and [WebKit data-store paths](https://github.com/WebKit/WebKit/blob/main/Source/
 
 ## Shell history stores
 
-The `shell` module also clears these default locations in each eligible home:
+The `shell` module truncates the known Bash, Zsh, shell/REPL and client history
+files in each eligible home. It clears `.bash_sessions` and `.zsh_sessions`,
+plus known Julia, GHCi, MATLAB, recent-file, Midnight Commander, and nano
+history files. These base targets do not wait for Bash or Zsh to exit.
+Open processes can write history back after cleanup.
+
+The additional stores below have separate process and schema checks:
 
 ```sh
 ./shredder.sh --modules shell --dry-run --debug
@@ -499,12 +649,11 @@ Storage references: [VS Code local-history path](https://github.com/microsoft/vs
 
 ## AI sessions
 
-The `ai` module is included when you run all modules. It operates on each
+The `ai` module is included in the standard selection. It operates on each
 eligible user home. Close the supported agents, their desktop apps, VS Code,
 Cursor, Windsurf, JetBrains IDEs, and background servers before a real run.
 The module refuses cleanup if it detects a running agent or cannot inspect
-processes. It does not stop
-processes for you. Keep the apps closed until cleanup finishes.
+processes. It does not stop processes for you. Keep the apps closed until cleanup finishes.
 
 ```sh
 # Preview local session cleanup. This also works while an agent is open.
@@ -658,6 +807,9 @@ can follow successful deletions. Review the warnings, correct the cause, and
 repeat the affected module. `--force` does not change this behavior. Expected
 reasons include active clients, mixed stores without opt-in, retained Safari
 tab groups, unknown schemas, busy WAL checkpoints, and access or path failures.
+Manual Siri deletion and retained Biome/IntelligencePlatform stores also
+produce incomplete results. A module can have no matching files and return
+success; exit `0` is not proof that all activity traces on the Mac are gone.
 
 Dry-run does not open the mixed SQLite stores or validate their schemas. It
 can finish with exit `0` while noting an operation that a real run would refuse.
@@ -667,9 +819,10 @@ cleanup will succeed.
 
 The summary counts operations, not individual records, bytes, or recovered
 disk space. A directory or database cleanup can count as one operation.
-Unsafe paths with user-controlled symlink parents are refused. A final symlink can be
-removed without following its target. Filesystem and SQLite
-mutations inside each home run with that home's owner privileges, not as root.
+Unsafe paths with user-controlled symlink parents are refused. Some file
+removal helpers can unlink a final symlink without following its target;
+selected-file, preference, and mixed-database operations instead refuse links.
+Filesystem and SQLite mutations inside each home run with that home's owner privileges, not as root.
 The same rule applies to per-user caches under `/private/var/folders`.
 Cache deletion checks the physical parent path and uses a relative target from
 that directory. Root-owned user directories are refused.
@@ -677,9 +830,12 @@ that directory. Root-owned user directories are refused.
 ## Tests
 
 The integration suite uses temporary sandboxes for cleanup. It covers CLI
-behavior, all registered modules, dry-run stability, process and path checks, AI and
-editor settings preservation, shell stores, browser origins and tab recovery,
-and mounted-volume Trash. SQLite tests cover transaction rollback, active
+behavior, all registered modules, dry-run stability, process and path checks,
+AI and editor settings preservation, shell stores, browser origins and tab
+recovery, and mounted-volume Trash. Native Finder and metadata checks operate
+on temporary files only. Live FSEvents purging, current-pasteboard clearing,
+Siri deletion, and post-cleanup application behavior are not established by
+these tests. SQLite tests cover transaction rollback, active
 readers and writers, WAL cleanup, unknown schemas, and retained credentials.
 
 ```sh
@@ -698,79 +854,3 @@ directories are rejected.
 ## License
 
 This project uses the [MIT License](LICENSE).
-
-### Terminal saved output and log files
-
-Select `--modules terminal` to remove Apple Terminal and iTerm2 saved window
-state, including iTerm2 `~/Library/Application Support/iTerm2/SavedState`.
-This removes persisted scrollback and recovery state. Close Terminal, iTerm2
-and their restoration servers first. The module refuses writes if a client
-is running or the process query fails. It does not terminate sessions.
-
-Session logs can be stored anywhere selected in the terminal profile. They
-are not discovered automatically. Use repeatable `--terminal-log-file` paths
-to select exact regular files below an eligible `/Users/<user>/` home.
-Directories, links and files that are open are refused. Example:
-
-```bash
-./shredder.sh --modules terminal --terminal-log-file /Users/alice/logs/session.txt --dry-run --debug
-```
-
-Terminal preferences, profiles, iTerm2 arrangements, session archives, shell
-history and unsaved documents are retained. Shell history and cmux history
-have separate options. This module does not clear live scrollback or prove
-that APFS snapshots, backups or external log copies have been erased.
-
-The scope follows the [iTerm2 restoration implementation](https://github.com/gnachman/iTerm2/blob/master/sources/StateRestoration/iTermRestorableStateController.m),
-[session restoration documentation](https://iterm2.com/documentation-restoration.html)
-and [session logging settings](https://iterm2.com/documentation-preferences-profiles-session.html).
-
-### Finder and Open/Save history
-
-`--modules finderhistory` clears only these keys in
-`~/Library/Preferences/com.apple.finder.plist`: `FXRecentFolders`,
-`GoToFieldHistory`, `GoToField`, `FXConnectToLastURL`,
-`RecentMoveAndCopyDestinations` and `RecentSearches`. It also clears
-`NSNavRecentPlaces` in `.GlobalPreferences.plist` and in the
-`com.apple.appkit.xpc.openAndSavePanelService.plist` preferences, including
-the service container under `~/Library/Containers/`.
-
-Quit Finder and close Open/Save dialogs before cleanup. A running Finder or
-panel service, or a failed process query, blocks writes. The module does not
-quit applications for you. Close other applications that may retain recent
-places in memory; they can write history again later.
-
-Only supported string or array values are removed with native macOS
-`defaults delete <plist-path> <key>`. Unknown keys, favorites, desktop icon
-positions, window settings and unsaved documents remain. A malformed plist,
-unexpected history type, link or wrong owner blocks that file. The module
-does not remove the whole preferences file or reset system preferences.
-A dry-run lists candidate files without validating their contents.
-
-Other application-specific Open/Save histories and renamed or future keys
-are outside this allowlist. Use `usage` for shared recent-document lists.
-These paths and key meanings are described in the
-[JPCERT macOS forensics workshop, page 106](https://jsac.jpcert.or.jp/archive/2022/pdf/JSAC2022_workshop_macOS-forensic_en.pdf).
-The Finder key names were also checked against the installed Finder executable.
-
-### Selected file origin metadata
-
-`filemetadata` requires one or more `--metadata-file /Users/<user>/path`
-arguments. It clears only `com.apple.metadata:kMDItemWhereFroms`, which can
-contain a download URL or sender information. It does not search directories
-or delete file content. For example:
-
-```sh
-./shredder.sh --modules filemetadata --metadata-file /Users/alice/Downloads/report.pdf --dry-run --debug
-```
-
-The file must be a regular file in an eligible home. Linked paths, hard links,
-directories and missing targets are refused. The module uses the file owner's
-identity and the native `xattr` tool. It reads attribute names, not values.
-Other attributes, including quarantine, Finder tags and comments, are retained.
-Filesystem metadata change times can change when an attribute is removed.
-
-This is not a universal copy-history reset. File contents, other copies,
-Spotlight indexes and backups can still contain origin information. See Apple's
-[`kMDItemWhereFroms` reference](https://developer.apple.com/documentation/coreservices/kmditemwherefroms)
-and the native `xattr(1)` manual for the attribute and tool behavior.
