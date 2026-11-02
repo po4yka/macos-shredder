@@ -19,12 +19,15 @@
 #   N  cache parent race   a replaced cache parent cannot redirect deletion
 #   O  Firefox failures    database errors cannot delete bookmarks
 #
-# Exit codes: 0 all phases passed; 1 one or more phases failed;
-#             77 shredder.sh not built yet.
+# After phases A-O: regressions, AI sessions, AI editors, browser stores,
+# shell stores, editor history and mounted-volume Trash suites.
+# Exit codes: 0 all checks passed; 1 a phase failed; a later suite can also
+# return its own nonzero status; 77 shredder.sh is missing.
 #
-# All scratch data lives in a mktemp work dir removed on exit; on failure the
-# logs, manifests and sandbox trees are copied to <repo>/tests-last-run/ for
-# CI artifact upload.
+# Each suite uses a temporary work directory removed on exit. A phase A-O
+# failure copies that phase runner's logs, manifests and sandbox trees to
+# <repo>/tests-last-run/. Later suites report failures through their output;
+# their temporary data is not copied by this runner.
 
 set -euo pipefail
 export LC_ALL=C

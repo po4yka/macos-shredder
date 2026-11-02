@@ -1,216 +1,179 @@
-# macos-shredder — integration test suite
+# macos-shredder test guide
 
-Self-contained integration tests for `shredder.sh`. The suite never touches
-the host system: every fixture lives inside a throwaway sandbox redirected
-through the `SHREDDER_ROOT` contract, so the same suite runs unchanged on a
-developer Mac and on a Linux CI runner.
+Run the suite from the repository root. Cleanup tests use temporary, marked
+sandboxes. They do not remove host histories, sessions, browser data, or Trash.
+The suite runs on macOS and Linux. It tests the script's behavior against local
+fixtures; it does not test every installed application version.
 
-Files:
+## Requirements and commands
 
-| Script                 | Role                                                        |
-| ---------------------- | ----------------------------------------------------------- |
-| `run-tests.sh`         | orchestrator — runs phases A–O, reports PASS/FAIL per phase |
-| `regressions.sh`       | additional cleanup, status, and logfile safety checks |
-| `ai-sessions.sh`       | AI session cleanup, database safety, and preservation checks |
-| `editor-history.sh` | Editor history, preservation, process and symlink guards |
-| `ai-editors.sh`        | Cursor/Windsurf/Continue/Cline/Roo/Aider cleanup and preservation |
-| `browser-stores.sh`    | Site storage, tab recovery, extension preservation, and opt-in cleanup |
-| `create-artifacts.sh`  | builds the deterministic sandbox fixture tree (+ manifest)  |
-| `verify-cleanup.sh`    | asserts post-cleaning state (`force`) or byte-stability (`dryrun`) |
-| `README.md`            | this document                                               |
+- Bash 3.2 or later.
+- Standard BSD or GNU command-line tools, including `find`, `stat`, `sort`,
+  `sed`, `awk`, `grep`, `cp`, `mv`, `rm`, `mkdir`, `mktemp`, and `mkfifo`.
+- `sqlite3` with JSON support. Tests use real databases, transactions, and WAL
+  readers and writers.
+- `shasum` or `sha256sum`, plus `gzip`, `cmp`, and `diff`.
+- ShellCheck for the optional lint command below.
 
-## Sandbox architecture (the SHREDDER_ROOT contract)
-
-`shredder.sh` honours `SHREDDER_ROOT=<dir>` only when the absolute,
-non-symlink directory contains `.macos-shredder-test-root`. Every filesystem
-target is redirected under that prefix, root/Darwin checks are skipped, and no
-special macOS tooling is required. Tests use this to build a miniature macOS
-filesystem with two simulated users:
-
-- `Users/alice` and `Users/User Space` — full per-user fixtures. The space in
-  `User Space` is deliberate bait for unquoted-enumeration bugs.
-- `Users/mallory` is a symlink to an escape sentinel and must never be
-  traversed by root cleanup.
-- `Users/Shared`, `Users/Guest`, `Users/.hiddenuser` — homes that enumerators
-  must **skip**; their history and `.DS_Store` files must survive untouched.
-
-System-level fixtures:
-
-- `var/log/system.log` containing the legacy `NYXTEST` marker plus the current
-  `SHRED-TEST` marker; `var/log/wifi.log`; `Library/Logs/DiagnosticReports/`
-  (system-level `crash-1.ips` and one per user).
-- `var/audit/2023…` / `2024…` rotation files plus a live record referenced by
-  `var/audit/current`; the live record and symlink must be preserved.
-- `var/db/diagnostics/{Persist,Special,HighVolume}/` — unified log store.
-- `private/var/folders/xx/yy/C/com.apple.notificationcenter/db2/db.db` and
-  `…/com.apple.QuickLook.thumbnailcache/thumb.jpg`.
-- `private/var/db/CoreDuet/Knowledge/knowledgeC.db` — a real SQLite database
-  (tables `ZOBJECT` and `ZSTRUCTUREDMETADATA`, each holding a marker row).
-
-Per-user fixtures:
-
-- Shell histories: `.zsh_history`, `.bash_history`, `.bash_sessions/`, and
-  `.ipython/profile_default/history.sqlite` with WAL/SHM/journal sidecars.
-- `Library/Preferences/com.apple.LaunchServices.QuarantineEventsV2` — real
-  SQLite (`LSQuarantineEvent` table + marker row).
-- Safari: `History.db` with `-wal` / `-shm` sidecars, plists, cache file, and
-  both container and legacy cookie stores.
-- Chrome: `Default` and `Profile 1`; an intermediate Chromium profile symlink
-  points outside the user home and must be refused.
-- Firefox: a custom-named profile proves cleanup does not depend on `default`
-  appearing in the profile directory name. Its real Places database contains
-  history, bookmarks, a bookmark folder, and a keyword. Cleanup must remove
-  history and preserve the saved references, including a stale bookmark counter.
-- Per-user KnowledgeC and Shared File List recent-item stores. Non-recent
-  favorites must survive.
-- Trash: `.Trash/file.txt` **and** `.Trash/.hidden-leak` (hidden file proves
-  correct emptying).
-- Homebrew caches/logs; app traces (VS Code, JetBrains, saved states).
-- `.DS_Store` files in `Users/<u>/{Desktop,Documents,Downloads}` and mirrored
-  under the data-volume tree `System/Volumes/Data/Users/<u>/…`; an external
-  volume sentinel at `Volumes/BACKUP/.DS_Store` that must **survive**.
-- Wifi system preferences under `Library/Preferences/SystemConfiguration/`.
-
-## Running locally
+No root privileges are required. From the repository root:
 
 ```sh
+# Check each script separately; bash -n accepts one script at a time.
+for script in shredder.sh tests/*.sh; do
+  /bin/bash -n "$script" || exit "$?"
+done
+
+# Run all phases and feature suites.
 ./tests/run-tests.sh
+
+# Optional local lint check.
+shellcheck shredder.sh tests/*.sh
 ```
 
-The orchestrator needs no arguments. Individual pieces can also be used
-directly:
+On macOS, also test the system tools that a real host run uses:
 
 ```sh
-tests/create-artifacts.sh /tmp/sbx [--manifest /tmp/manifest.tsv]
-tests/verify-cleanup.sh /tmp/sbx --phase force
-tests/verify-cleanup.sh /tmp/sbx --phase dryrun --manifest /tmp/manifest.tsv
+PATH=/usr/bin:/bin:/usr/sbin:/sbin /bin/bash tests/run-tests.sh
 ```
 
-Exit codes: `run-tests.sh` → `0` all phases passed, `1` any phase failed,
-`77` `shredder.sh` not built yet. `verify-cleanup.sh` → `0` all checks passed,
-`1` any check failed.
+The SQLite found on a developer's `PATH` can differ from `/usr/bin/sqlite3`.
+The AI transaction regression tests both binaries when available. The shared
+SQL helper sends statements on separate input lines with `-bail`: a failed
+statement must stop execution before a later `DELETE` or `COMMIT`. A separate
+browser test holds a WAL reader open and requires a reported failure until
+checkpoint truncation can complete.
 
-## What each phase proves
+## Test files
 
-- **A — usage validation**: `--modules bogus_definitely_invalid` must exit
-  `64` and print valid module ids → strict exact-match CLI validation.
-- **B — module listing**: `--list` exits `0` and prints all 16 module ids.
-- **C — forced clean**: after `--force --debug` against a fresh sandbox:
-  - histories emptied/gone for both users → **space-in-username enumeration
-    fix**;
-  - `.Trash/.hidden-leak` gone → hidden-file-aware trash emptying;
-  - audit rotations gone while `var/audit/current` survives → preservation
-    proof;
-  - `Volumes/BACKUP/.DS_Store` survives while every in-sandbox `.DS_Store` is
-    swept → external-volume pruning proof;
-  - quarantine/KnowledgeC marker rows absent → markers really removed;
-  - output contains `Total items cleaned:` with a count > 0 and exactly zero
-    failed operations;
-  - a corrupt SQLite database makes verification fail closed.
-- **D — dry-run byte-stability**: `create-artifacts.sh --manifest` captures
-  directories, file hashes, and symlink targets before the run; after
-  `shredder.sh -n -f --debug` all entries and the file/link set must remain
-  identical → proves there is **no unguarded destructive operation** behind
-  the dry-run flag (the latent-bomb regression class).
-- **E — sandbox guard**: an unmarked `SHREDDER_ROOT` must fail before any
-  module runs. Fixture roots carry `.macos-shredder-test-root`.
-- **F — confirmation guard**: a non-interactive destructive run without
-  `--force` must abort without changing the fixture.
-- **G — host-command isolation**: sandbox mode must not execute `defaults` or
-  `qlmanage`; command stubs turn any attempted invocation into a test failure.
-- **H — least-privilege user commands**: user-home mutations must pass through
-  the owner-UID command wrapper when the caller UID differs.
-- **I — symlink refusal**: the adversarial user-home symlinks are tested
-  separately and must produce exit `2` with the exact expected failure count.
-- **J — sandbox boundary**: a symlink in a sandbox system path must be refused;
-  all targets outside the marked root must survive unchanged.
-- **K — trusted PATH**: real mode must ignore commands injected through the
-  caller's `PATH`; sandbox mode keeps `PATH` injection for isolated test stubs.
-- **L — SQLite discovery**: an error while inspecting KnowledgeC tables must
-  produce exit `2` instead of continuing to `VACUUM` and reporting success.
-- **M — Spotlight result**: on Darwin, a native Spotlight dry-run must count
-  the requested erase-and-rebuild operation; non-Darwin hosts skip this check.
-- **N — cache parent race**: replace a cache directory with a symlink after
-  the path check. Cleanup must return `2` and preserve both the outside file
-  and the original cache entry. Phase H also checks owner-UID execution for
-  files under `/private/var/folders`.
-- **O — Firefox failure safety**: an unsupported schema and a transaction error
-  must return `2` with the database contents unchanged. Without SQLite on PATH,
-  cleanup must preserve the database bytes and report failure.
+| File | Role |
+| --- | --- |
+| `run-tests.sh` | Runs core phases A–O, then the suites below in table order |
+| `regressions.sh` | General cleanup, status, logfile, and fixture checks |
+| `ai-sessions.sh` | Agent sessions, databases, mixed JSON, derived data, and credentials |
+| `ai-editors.sh` | Cursor, Windsurf, Continue, Cline/Roo, and Aider sessions |
+| `browser-stores.sh` | Website storage, tab recovery, extension opt-in, and WAL handling |
+| `shell-stores.sh` | Atuin and alternative shell history stores |
+| `editor-history.sh` | Editor local history, retained settings, and unsaved buffers |
+| `volume-trash.sh` | Opt-in mounted-volume Trash cleanup and owner checks |
+| `create-artifacts.sh` | Builds the core fixture tree and optional manifest |
+| `verify-cleanup.sh` | Checks core cleanup results or dry-run stability |
 
-## Requirements
+Each feature suite can run independently, for example:
 
-After phases A–O, the suite runs `regressions.sh`. It checks failed directory
-traversal, snapshot listing errors, Wi-Fi stores, zsh sessions, log rotations,
-macOS browser cache paths, SQLite sidecars, Firefox sessions, active-browser
-status, Trash symlinks, safe logfile creation, and fixture rebuilds. Three builds
-of the same fixture must produce identical manifests without nested symlinks.
-These checks use temporary files; host snapshot and browser states are simulated
-at the function boundary.
-
-The suite also runs `ai-sessions.sh`. It uses real SQLite databases for legacy
-and current session tables, mixed credential/configuration tables, desktop
-catalogs, and a live WAL writer. It checks dry-run byte stability, successful
-cleanup, preserved settings and credentials, optional memory cleanup, custom
-roots, repeat runs, multiple users, corrupt/unsupported schemas, database locks,
-missing SQLite, symlinks, hard links, JSON errors, and Claude scratchpads.
-A failed-statement test uses the selected and native SQLite binaries to prove
-that a failed CHECK prevents later DELETE and COMMIT statements.
-Process detection is tested with controlled command listings; no host agent
-is stopped and no host session store is changed.
-
-`ai-editors.sh` adds four groups for editor databases, file-based session stores,
-failure safety, and custom roots/process guards. It checks named profiles,
-workspace databases, backups, binary secret values, nested settings, unchanged
-approval flags, Cascade settings, extension configuration, Aider source/Git
-preservation, dry-run stability, and repeat cleanup. Unknown schemas, malformed
-extension state, symlinked stores, WAL links, and recovery copies must fail closed.
-
-`browser-stores.sh` checks eight groups: Chromium profiles and mixed-store opt-in,
-Firefox origins and legacy SQLite, Safari stores and retained synced tabs,
-unknown schemas/symlink safety, active-browser/process-query failures, the macOS Brave process name, Safari cache-only roots, and pinned WAL readers.
-Passwords, bookmarks, extension state, dry-run bytes, and repeat runs are checked.
-
-- bash 3.2+ (no bash-4-only features used)
-- POSIX-ish userland: `find sort sed awk grep wc stat cp mv rm mkdir` — BSD or
-  GNU variants both work (file sizes via `stat -c%s` with `stat -f%z`
-  fallback)
-- `shasum` **or** `sha256sum` for manifests/hashes
-- `gzip` and `cmp` for compressed-log and file-preservation checks
-- `sqlite3`: required for real Firefox Places fixtures, bookmark preservation,
-  transaction rollback, and database integrity checks
-- no root privileges anywhere
-
-## CI integration
-
-`volume-trash.sh` checks opt-in volume cleanup, hidden entries, UID scope,
-dry-run stability, repeated cleanup, symlink refusal, owner mismatches,
-permission failures, and the native mounted-filesystem check. All writes use
-temporary sandboxes; the native branch uses metadata injection and does not
-delete host data.
-
-On any phase failure `run-tests.sh` copies logs, manifests and the full
-sandbox trees to `tests-last-run/` at the repo root — upload that directory as
-a build artifact to debug failures. Example GitHub Actions step:
-
-```yaml
-- run: ./tests/run-tests.sh
-- if: failure()
-  uses: actions/upload-artifact@v4
-  with:
-    name: tests-last-run
-    path: tests-last-run/
+```sh
+/bin/bash tests/browser-stores.sh
+/bin/bash tests/shell-stores.sh
+/bin/bash tests/editor-history.sh
+/bin/bash tests/volume-trash.sh
 ```
 
-`editor-history.sh` checks VS Code-family local history (shared by profiles),
-JetBrains LocalHistory and Vim/Neovim state. It verifies byte-for-byte dry-run
-preservation, repeated cleanup, retained settings and unsaved buffers, process
-query failures, active editors, symlink boundaries and enumeration failures.
+The runner returns `0` when all checks pass, `1` when a core phase fails, and
+`77` when `shredder.sh` is missing. A feature-suite failure stops the runner
+with a nonzero status. The verifier returns `0` for success and `1` for a failed
+check. These are test exit codes; the cleaner's exit codes are documented in
+[the project README](../README.md#results-and-incomplete-cleanup).
 
-### Alternative shell stores
+## Sandbox contract and fixtures
 
-`tests/shell-stores.sh` uses marked temporary sandboxes and real SQLite databases.
-It verifies Atuin history and encrypted history record deletion, history pack
-manifest deletion, preservation of keys and mixed-store configuration, default
-file stores, named IPython profiles, dry-run stability, repeated cleanup,
-unknown schema and trigger refusal, link safety, and active-client detection.
+`SHREDDER_ROOT` must name an existing absolute directory that is not a symlink
+and contains `.macos-shredder-test-root`. The script resolves its physical path
+and redirects cleanup targets under it. Root, Darwin, and Full Disk Access
+checks are skipped. The sandbox keeps the test `PATH` for controlled command
+substitutions. Host AI environment overrides are ignored; explicit AI roots
+under `/Users/...` are mapped below the sandbox.
+
+Sandbox mode does not automatically simulate every native condition. Tests
+inject process results, owner metadata, and selected command failures where
+needed. The Spotlight check uses a native dry-run on macOS and performs no
+index mutation. No host client is stopped.
+
+The core fixture contains two regular users, `alice` and `User Space`, plus a
+linked home and `Shared`, `Guest`, and hidden homes that must remain untouched.
+It includes shell histories, logs, audit trails, quarantine and KnowledgeC
+SQLite databases, browser profiles, Quick Look and application caches, recent
+items, home Trash, Wi-Fi preferences, and `.DS_Store` files. A mounted-volume
+sentinel must survive cleanup without `--include-volumes`. Firefox fixtures
+include bookmarks and keywords as well as history. Audit fixtures include a
+`current` link whose target must remain. The linked Chromium profile points to
+an escape sentinel that must remain unchanged.
+
+Feature suites create separate fixtures for agent sessions, editor histories,
+site data, alternative shell stores, and volume Trash. They do not depend on
+`create-artifacts.sh` to supply those stores.
+
+To inspect the core fixture manually, use a new disposable directory:
+
+```sh
+test_dir="$(mktemp -d)"
+./tests/create-artifacts.sh "$test_dir/sandbox" --manifest "$test_dir/manifest.tsv"
+SHREDDER_ROOT="$test_dir/sandbox" ./shredder.sh --dry-run --debug
+./tests/verify-cleanup.sh "$test_dir/sandbox" --phase dryrun \
+  --manifest "$test_dir/manifest.tsv"
+
+SHREDDER_ROOT="$test_dir/sandbox" ./shredder.sh --force --debug
+./tests/verify-cleanup.sh "$test_dir/sandbox" --phase force
+```
+
+The fixture builder writes test files and creates the sandbox marker. Use it
+only in a disposable test directory. Keep that directory for inspection, then
+remove it when finished. Never mark a real home or mounted volume as a sandbox.
+
+## Core phases A–O
+
+| Phase | Required behavior |
+| --- | --- |
+| A — CLI validation | Invalid or empty module selections return `64` and retain data |
+| B — module listing | `--list` returns `0` and includes all 16 module IDs |
+| C — forced cleanup | Selected fixture data is removed for both users; bookmarks, audit `current`, excluded homes, and external-volume sentinels remain; corrupt SQLite makes verification fail |
+| D — dry-run | File hashes, directories, and symlink targets match the pre-run manifest; an added file makes verification fail |
+| E — sandbox guard | An unmarked root is refused before cleanup |
+| F — confirmation | Non-interactive cleanup without `--force` fails without changing the fixture |
+| G — host isolation | Sandbox mode does not invoke host `defaults` or `qlmanage` commands |
+| H — owner privileges | Home and per-user cache mutations use the owner-UID wrapper when the caller UID differs |
+| I — symlink refusal | Adversarial browser paths return `2` with the expected failure count; escape sentinels remain |
+| J — sandbox boundary | A linked system path cannot redirect cleanup outside the marked root |
+| K — trusted PATH | Native mode ignores injected caller commands; sandbox mode permits test command substitution |
+| L — SQLite discovery | Failed KnowledgeC inspection returns `2` instead of continuing to compaction |
+| M — Spotlight | On macOS, dry-run reports the requested erase-and-rebuild operation; other platforms skip this native check |
+| N — cache parent race | A parent replaced with a symlink cannot redirect deletion; the original entry and escape sentinel remain |
+| O — Firefox failure safety | Unsupported schema, transaction errors, and absent SQLite retain the Places database and report failure |
+
+## Feature and failure-path coverage
+
+| Suite | Checks |
+| --- | --- |
+| General regressions | Failed traversal and snapshot listing, Wi-Fi stores, zsh sessions, log rotations, browser caches and sidecars, active browsers, Trash links, private logfiles, and three deterministic fixture rebuilds |
+| AI sessions | Sessions, archives, indexes, desktop catalogs, mixed configuration/credential tables and JSON, optional derived data, custom roots, multiple users, repeated cleanup, unknown schemas, locks, links, Claude scratchpads, environment overrides, and failed-statement rollback |
+| AI editors | Named profiles, workspace databases and backups, binary secrets, approval settings, Cascade settings, extension configuration, Aider source/Git preservation, custom roots, malformed state, and recovery-copy refusal |
+| Browser stores | Chromium profiles, mixed-store opt-in, Firefox origin directories and SQLite metadata, retained extension state, Safari saved tab-group refusal, Safari cache-only roots, Brave process naming, process-query failures, symlinks, and a pinned WAL reader followed by successful retry |
+| Shell stores | Atuin history and encrypted history records, history pack manifests, retained keys/authentication/KV/scripts, fish, Nushell, Xonsh, histdb, directory jump stores, IPython profiles, unsupported schemas, rollback, and active clients |
+| Editor history | VS Code-family shared history, JetBrains LocalHistory, Vim/Neovim state, retained settings and unsaved buffers, process checks, symlink boundaries, and enumeration failures |
+| Volume Trash | Default exclusion, explicit opt-in, hidden entries, UID scope, retained Trash directories, links, owner mismatch, deletion failure, and the native mounted-device filter |
+
+Feature suites check dry-run preservation and repeated cleanup where applicable.
+Process detection is tested with controlled command listings. Native volume
+filtering uses injected metadata; tests do not mount or erase a real disk.
+Actual application startup after cleanup, live Full Disk Access/SIP behavior,
+cloud synchronization, and all vendor schema versions remain outside automated
+acceptance. See the README for supported layouts and retained stores.
+
+## CI and failure artifacts
+
+The [workflow](../.github/workflows/tests.yml) runs on pushes to `main`, pull
+requests, and manual dispatch. It uses `macos-latest` and `ubuntu-latest`, checks
+each shell script's syntax, and runs `tests/run-tests.sh`. ShellCheck is not
+currently a workflow step.
+
+If a core phase A–O fails, the runner copies its logs, manifests, and sandbox
+trees to `tests-last-run/`. CI uploads this directory with
+`actions/upload-artifact@v7` as `tests-last-run-<os>`. Missing artifacts are
+ignored. Each later feature suite removes its temporary directory on exit;
+those failures are visible in command output but do not automatically populate
+`tests-last-run/`. Capture output when diagnosing an individual suite:
+
+```sh
+/bin/bash tests/browser-stores.sh > /tmp/shredder-browser-tests.log 2>&1
+```
+
+The fixture checks do not establish secure erasure on APFS or SSDs. They verify
+selected logical removals and preservation rules against the tested layouts.

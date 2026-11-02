@@ -5,8 +5,9 @@
 #
 # Usage: create-artifacts.sh <SANDBOX_ROOT> [--manifest <FILE>]
 #
-# Builds the full sandbox layout described in tests/README.md. Idempotent:
-# safe to re-run over an existing sandbox. SQLite is required for the Firefox
+# Builds the core A-O fixture layout described in tests/README.md. Feature
+# suites create their own fixtures. Repeated builds are deterministic;
+# use only a disposable test directory. SQLite is required for the Firefox
 # bookmark fixtures.
 
 set -euo pipefail

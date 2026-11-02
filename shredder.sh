@@ -7,23 +7,26 @@
 #
 # Purpose:
 #   Reduce the forensic footprint of a macOS system by clearing shell and
-#   REPL histories, system/audit logs, browser traces, the unified log
+#   REPL histories, editor history, local AI sessions, system/audit logs,
+#   browser site data and tab recovery, the unified log
 #   store, quarantine/FSEvents artifacts, usage databases, Spotlight
 #   indexes, Quick Look caches, Trash contents, .DS_Store files, Wi-Fi
 #   network reminders, package-manager caches and application leftovers.
+#   Optional scopes include mounted-volume Trash, shared browser extension
+#   data, AI-derived artifacts and local Time Machine snapshots.
 #
 # Testability (sandbox mode):
 #   Create .macos-shredder-test-root in a sandbox, then export
 #   SHREDDER_ROOT=/path/to/sandbox to root EVERY filesystem target there.
-#   In that mode the root-privilege check, the
-#   Darwin OS check and the Full Disk Access probe are skipped, and any
-#   missing system utility degrades gracefully into a debug note with an
-#   honest zero count instead of failing.
+#   In that mode the root-privilege check, Darwin OS check and Full Disk
+#   Access probe are skipped. Host cleanup commands are skipped or replaced
+#   by sandbox operations. Required tools and unsafe data can still cause
+#   failures; sandbox mode does not imply that every operation will succeed.
 #
 # Exit codes:
 #   0    success (or a dry-run completed)
 #   1    fatal initialization error
-#   2    one or more operations failed during a real run
+#   2    one or more operations failed or were refused (also possible in dry-run)
 #   64   usage error
 #   130  interrupted by user (SIGINT)
 
@@ -661,11 +664,12 @@ Options:
                         See '--list' for valid ids; unknown ids are rejected.
   -f, --force           Do not ask for confirmation (auto-answer yes)
       --logfile FILE    Create a new private operation log after confirmation
-      --include-volumes Also process mounted volumes under /Volumes
+      --include-volumes Include mounted-volume Trash, FSEvents and .DS_Store
+                        targets when their modules are selected
       --include-extension-data
                         Also delete mixed website/extension storage. This can
                         reset extension settings and extension sign-ins.
-      --purge-snapshots Delete APFS Time Machine local snapshots before modules
+      --purge-snapshots Delete local Time Machine snapshots before selected modules
       --ai-derived     Also remove AI memory, plans and generated artifacts
       --ai-root KIND=PATH
                         Add an AI storage location below /Users/<user>/.
@@ -674,6 +678,12 @@ Options:
                         Also: cursor, cursor-editor, windsurf, editor,
                         continue, cline, roo, aider, aider-history.
                         Repeat for multiple locations; defaults are also cleaned.
+
+Scope:
+  Per-user modules process eligible homes under /Users, not just the caller.
+  Close the clients listed in README.md before cleanup. --force skips only
+  confirmation; it does not bypass process, path or database checks.
+  A dry-run does not validate mixed SQLite schemas or prove secure erasure.
 
 Environment:
   SHREDDER_ROOT         When set, every filesystem target is rooted under this

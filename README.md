@@ -1,7 +1,8 @@
 # macOS Shredder
 
-`macos-shredder` is a macOS-only cleanup script for shell histories, logs,
-browser data, usage databases, caches, Trash, and related activity traces.
+`macos-shredder` is a macOS-only cleanup script for shell and editor histories,
+local AI sessions, browser site data and tab recovery, logs, usage databases,
+caches, and Trash.
 
 > Warning: this program deletes data. Run a dry-run first. Use it only on a
 > Mac that you own or administer.
@@ -14,9 +15,11 @@ browser data, usage databases, caches, Trash, and related activity traces.
   under **System Settings > Privacy & Security > Full Disk Access**.
 - System Integrity Protection can block some system locations.
 - macOS services can recreate caches, indexes, and databases after cleanup.
-- Close browsers and their background/helper processes before the `browser` module. The script skips active browser
-  site and session data to avoid corruption. A real run with skipped browser data
-  exits `2`. Keep browsers closed until cleanup finishes.
+- Close browsers and their background processes before the `browser` module.
+  The script skips active browser site and session data to avoid corruption.
+  A real run with skipped browser data exits `2`. Keep browsers closed until
+  cleanup finishes. The `ai`, `editors`, and extended `shell` stores also have
+  process checks; their sections below list the clients to close.
 - Firefox history cleanup preserves bookmarks and keywords in `places.sqlite`.
   If SQLite is unavailable or cleanup fails, the database is retained and the
   run reports a failure.
@@ -36,8 +39,45 @@ chmod +x shredder.sh
 sudo ./shredder.sh --modules shell,browser,trash --force
 ```
 
-Without `--modules`, the script runs every module. Without `--force`, a real
-run asks for confirmation.
+Without `--modules`, the script runs all 16 modules, including `ai` and
+`editors`. Modules run in the order listed below, regardless of the order in
+`--modules`. Without `--force`, a real run asks for confirmation. `--force`
+only skips that prompt; it does not bypass process, path, or database checks.
+
+Real cleanup requires macOS, Bash 3.2 or later, root privileges, and access to
+the selected files. Mixed database and JSON cleanup requires `sqlite3` with
+JSON support. The script uses the system command paths during a real run;
+installing a different SQLite on the caller's `PATH` does not replace the
+system binary. Dry-run does not require root, but limited read access can
+prevent it from discovering all targets.
+
+Per-user modules process eligible homes under `/Users`, not just the invoking
+user's home. Linked homes are excluded. Directory Services supplies users on
+macOS; the fallback directory scan also excludes `Shared`, `Guest`, and hidden
+home directories. There is no single-user selection option.
+
+### Options
+
+| Option | Effect |
+| --- | --- |
+| `-h`, `--help` | Show command-line help |
+| `-v`, `--version` | Show the script version |
+| `-l`, `--list` | List the module IDs and descriptions |
+| `-m`, `--modules IDS` | Select comma-separated module IDs; omitted means all modules |
+| `-n`, `--dry-run` | Preview without changing cleanup targets or creating an operation log |
+| `-d`, `--debug` | Show detailed operations and skipped paths |
+| `-f`, `--force` | Skip the cleanup confirmation prompt |
+| `--logfile FILE` | Create a private operation log after confirmation |
+| `--include-volumes` | Include mounted-volume targets in the selected `trash`, `fileevents`, and `dsstore` modules |
+| `--include-extension-data` | Allow `browser` to remove shared website/extension storage; this can reset extension settings and sign-ins |
+| `--purge-snapshots` | Delete local Time Machine snapshots before the selected modules run |
+| `--ai-derived` | Include supported memory, plans, and generated artifacts in `ai` cleanup |
+| `--ai-root KIND=PATH` | Add a custom AI storage location; repeat for multiple roots |
+
+The four scope-expansion flags are off by default. `--ai-root` is additive;
+it does not restrict cleanup to the supplied path. `--purge-snapshots` runs
+independently of module selection. See the sections below before enabling
+these options.
 
 `--logfile FILE` creates a new log with mode `0600` after confirmation. Existing
 files and symlink paths are refused. The parent directory must belong to the
@@ -67,8 +107,16 @@ Dry-run and `--list` do not create logs.
 | `ai` | Local sessions for Claude Code, Codex, OpenCode, Cursor, Windsurf, Continue, Cline/Roo, and Aider |
 
 Mounted volumes are excluded by default. Use `--include-volumes` to include
-their FSEvents, `.DS_Store` data, and per-user Trash. Use `--purge-snapshots` only when you also
-want to delete local Time Machine snapshots.
+their FSEvents, `.DS_Store` data, and per-user Trash in the corresponding
+selected modules. Use `--purge-snapshots` only when you also want to delete
+local Time Machine snapshots.
+
+### Mounted-volume Trash
+
+```sh
+./shredder.sh --modules trash --include-volumes --dry-run --debug
+sudo ./shredder.sh --modules trash --include-volumes --force
+```
 
 For external Trash only, use `--modules trash --include-volumes`. The script
 empties `/Volumes/<mount>/.Trashes/<uid>` for each eligible local user. It
@@ -110,16 +158,18 @@ Application Cache, WebStorage, and all IndexedDB stores. It also includes
 Firefox extension-origin site storage and legacy local-storage databases, plus
 Safari's shared WebKit stores under `WebsiteData` and named `WebsiteDataStore`
 directories, plus service-worker, cache-storage, and migrated storage under
-WebKit cache roots. It does not remove the separate extension settings directories.
+WebKit cache roots. It does not remove the separate extension settings
+directories.
 
 Safari's modern `SafariTabs.db` also holds saved and synced tab groups. The
 script retains it and reports exit `2`, even with `--include-extension-data`.
 Remove those tabs through Safari if required. Custom browser profile locations,
 other browser products, synced copies, and exported session files are outside
-this module's automatic scope. Without `--include-extension-data`, unknown legacy Firefox local-storage SQLite
-schemas are retained and reported rather than deleted. Unknown quota-cache
-schemas are always retained and reported. A busy SQLite checkpoint also reports
-exit `2`; close background readers and repeat cleanup to remove old WAL pages.
+this module's automatic scope. Without `--include-extension-data`, unknown
+legacy Firefox local-storage SQLite schemas are retained and reported rather
+than deleted. Unknown quota-cache schemas are always retained and reported.
+A busy SQLite checkpoint also reports exit `2`; close background readers and
+repeat cleanup to remove old WAL pages.
 
 Storage layouts are based on [Chromium profile file names](https://github.com/chromium/chromium/blob/main/chrome/common/chrome_constants.h),
 [Chromium session storage](https://github.com/chromium/chromium/blob/main/components/sessions/core/session_constants.cc),
@@ -130,6 +180,10 @@ and [WebKit data-store paths](https://github.com/WebKit/WebKit/blob/main/Source/
 ## Shell history stores
 
 The `shell` module also clears these default locations in each eligible home:
+
+```sh
+./shredder.sh --modules shell --dry-run --debug
+```
 
 | Client | Local data cleared |
 | --- | --- |
@@ -187,6 +241,9 @@ The module clears these standard locations in each eligible home:
 Settings, credentials, extensions, project files, Git history, unsaved editor
 `Backups`, swap files and persistent undo files remain. Vim/Neovim history
 cleanup also removes stored marks, registers and recent-file lists.
+The `editors` module owns `.viminfo`; `--modules shell` no longer clears it.
+Use `ai` to clear supported editor chat histories and `apps` for the selected
+application caches, logs, and saved terminal states.
 Custom user-data directories, custom `idea.system.path`, `NVIM_APPNAME`, XDG or
 ShaDa path overrides, remote editor stores and third-party history extensions
 are outside this module's scope. Recent-file and search records in mixed editor
@@ -201,8 +258,8 @@ Storage references: [VS Code local-history path](https://github.com/microsoft/vs
 The `ai` module is included when you run all modules. It operates on each
 eligible user home. Close the supported agents, their desktop apps, VS Code,
 Cursor, Windsurf, JetBrains IDEs, and background servers before a real run.
-The module refuses cleanup
-if it detects a running agent or cannot inspect processes. It does not stop
+The module refuses cleanup if it detects a running agent or cannot inspect
+processes. It does not stop
 processes for you. Keep the apps closed until cleanup finishes.
 
 ```sh
@@ -265,8 +322,8 @@ covered. This is local cleanup, not guaranteed secure erase.
 
 ### Custom locations
 
-Default roots are `~/.claude`, `~/.codex`, `~/.local/share/opencode`, and
-`~/.local/state/opencode`. Real runs also read `CLAUDE_CONFIG_DIR`,
+The root-kind table below lists the standard locations. Real runs also read
+`CLAUDE_CONFIG_DIR`,
 `CODEX_HOME`, `CODEX_SQLITE_HOME`, `XDG_DATA_HOME`, `XDG_STATE_HOME`,
 `OPENCODE_DB`, `CLAUDE_CODE_TMPDIR`, `CONTINUE_GLOBAL_DIR`, `CLINE_DATA_DIR`,
 `CLINE_DIR`, `AIDER_CHAT_HISTORY_FILE`, `AIDER_INPUT_HISTORY_FILE`, and
@@ -286,10 +343,18 @@ sudo ./shredder.sh --modules ai --force \
   --ai-root 'opencode-db=/Users/alice/Agent Data/custom.db'
 ```
 
-Additional root kinds use these paths:
+All supported `--ai-root` kinds use these paths. `~` in the table refers to
+the eligible user's home; pass an absolute path to the option.
 
 | Kind | Directory or file to pass |
 | --- | --- |
+| `claude` | Claude data root, normally `~/.claude` |
+| `codex` | Codex data root, normally `~/.codex` |
+| `codex-db` | Directory containing supported SQLite databases, normally within the Codex data root |
+| `opencode` | OpenCode data root, normally `~/.local/share/opencode` |
+| `opencode-state` | OpenCode state root, normally `~/.local/state/opencode` |
+| `opencode-db` | One OpenCode SQLite database file |
+| `claude-temp` | A dedicated scratchpad directory; its entire contents can be removed |
 | `cursor` | Cursor CLI/project data root, normally `~/.cursor` |
 | `cursor-editor` | Cursor's `User` directory, normally `~/Library/Application Support/Cursor/User` |
 | `editor` | Another supported editor's `User` directory; cleans Cline/Roo extension history |
@@ -336,16 +401,29 @@ Editor references: [Cursor local transcripts](https://forum.cursor.com/t/cant-ac
 [Roo task history](https://github.com/RooCodeInc/Roo-Code/blob/main/src/core/task-persistence/TaskHistoryStore.ts),
 and [Aider history options](https://aider.chat/docs/config/options.html#history-files).
 
-## Result contract
+## Results and incomplete cleanup
 
-- Exit `0`: success, or a completed dry-run.
+- Exit `0`: the run or dry-run completed with zero counted failures.
 - Exit `2`: one or more requested operations failed or were refused.
 - Exit `64`: invalid command-line input.
 - Exit `1`: initialization or environment failure.
 - Exit `130`: interrupted by the user.
 
-The summary counts only operations that succeeded or would run. Unsafe paths
-with user-controlled symlink parents are refused. A final symlink can be
+Cleanup is not atomic across files, databases, users, or modules. An exit `2`
+can follow successful deletions. Review the warnings, correct the cause, and
+repeat the affected module. `--force` does not change this behavior. Expected
+reasons include active clients, mixed stores without opt-in, retained Safari
+tab groups, unknown schemas, busy WAL checkpoints, and access or path failures.
+
+Dry-run does not open the mixed SQLite stores or validate their schemas. It
+can finish with exit `0` while noting an operation that a real run would refuse.
+Directory traversal errors and unmatched custom AI roots can still produce
+exit `2` during a dry-run. A successful preview does not guarantee that a real
+cleanup will succeed.
+
+The summary counts operations, not individual records, bytes, or recovered
+disk space. A directory or database cleanup can count as one operation.
+Unsafe paths with user-controlled symlink parents are refused. A final symlink can be
 removed without following its target. Filesystem and SQLite
 mutations inside each home run with that home's owner privileges, not as root.
 The same rule applies to per-user caches under `/private/var/folders`.
@@ -354,13 +432,20 @@ that directory. Root-owned user directories are refused.
 
 ## Tests
 
-The integration suite redirects every target into a marked temporary sandbox.
-It verifies exact module parsing, forced cleanup, dry-run byte stability,
-spaces in home paths, symlink escape protection, and sandbox isolation.
+The integration suite uses temporary sandboxes for cleanup. It covers CLI
+behavior, all 16 modules, dry-run stability, process and path checks, AI and
+editor settings preservation, shell stores, browser origins and tab recovery,
+and mounted-volume Trash. SQLite tests cover transaction rollback, active
+readers and writers, WAL cleanup, unknown schemas, and retained credentials.
 
 ```sh
 ./tests/run-tests.sh
 ```
+
+See [the test guide](tests/README.md) for dependencies, individual suites,
+system-SQLite checks, failure artifacts, and the limits of sandbox validation.
+The [CI workflow](.github/workflows/tests.yml) runs shell syntax checks and the
+suite on macOS and Ubuntu. ShellCheck is a separate local check.
 
 `SHREDDER_ROOT` is an internal test interface. The target must be an absolute,
 non-symlink directory that contains `.macos-shredder-test-root`; unmarked
