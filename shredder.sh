@@ -2841,67 +2841,96 @@ module_editors() {
 
 # Explicit roots are additive. Keep custom paths within the existing home-owner
 # security boundary; never evaluate shell configuration to discover a path.
-add_ai_root() {
-    local kind="${1%%=*}" path="${1#*=}" relative
+# ai_root_problem KIND PATH - print why an AI root is not acceptable, or
+# nothing when it is.
+ai_root_problem() {
+    local kind="$1" path="$2" relative
     case "$kind" in
         claude|codex|codex-db|opencode|opencode-state|opencode-db|claude-temp|cursor|cursor-editor|windsurf|editor|continue|cline|roo|aider|aider-history) ;;
-        *) usage_error "unknown AI root kind: $kind" ;;
+        *) printf 'unknown AI root kind: %s\n' "$kind"; return 0 ;;
     esac
-    path="${path%/}"
     case "$path" in
         /Users/*/*) ;;
-        *) usage_error "AI roots must be below /Users/<user>/: $path" ;;
+        *) printf 'AI roots must be below /Users/<user>/: %s\n' "$path"; return 0 ;;
     esac
     case "$path/" in
-        *'/../'*|*'/./'*|*'//'*) usage_error "AI root must be a normalized absolute path" ;;
+        *'/../'*|*'/./'*|*'//'*) printf 'AI root must be a normalized absolute path\n'; return 0 ;;
     esac
     case "$path" in
-        *$'\n'*|*$'\r'*|*$'\t'*) usage_error "AI root must not contain control whitespace" ;;
+        *$'\n'*|*$'\r'*|*$'\t'*) printf 'AI root must not contain control whitespace\n'; return 0 ;;
     esac
     relative="${path#/Users/}"
-    [ -n "${relative#*/}" ] || usage_error "AI root cannot be a user home"
+    [ -n "${relative#*/}" ] || printf 'AI root cannot be a user home\n'
+}
+
+add_ai_root() {
+    local kind="${1%%=*}" path="${1#*=}" problem
+    path="${path%/}"
+    problem="$(ai_root_problem "$kind" "$path")"
+    [ -z "$problem" ] || usage_error "$problem"
+    AI_ROOTS[${#AI_ROOTS[@]}]="$kind=$path"
+}
+
+# add_env_ai_root VARIABLE KIND PATH - add a root derived from the caller's
+# environment. An unrelated shell setting must not stop the whole run, so an
+# unacceptable value is reported, counted as incomplete cleanup and ignored.
+add_env_ai_root() {
+    local variable="$1" kind="$2" path="${3%/}" problem
+    problem="$(ai_root_problem "$kind" "$path")"
+    if [ -n "$problem" ]; then
+        log_warn "ai: ignoring $variable: $problem"
+        [ "$DRY_RUN" -eq 1 ] || FAILED_COUNT=$((FAILED_COUNT + 1))
+        return 0
+    fi
     AI_ROOTS[${#AI_ROOTS[@]}]="$kind=$path"
 }
 
 ai_environment_roots() {
     [ "$TEST_MODE" -eq 0 ] || return 0
-    [ -z "${CONTINUE_GLOBAL_DIR:-}" ] || add_ai_root "continue=$CONTINUE_GLOBAL_DIR"
+    [ -z "${CONTINUE_GLOBAL_DIR:-}" ] || add_env_ai_root CONTINUE_GLOBAL_DIR continue "$CONTINUE_GLOBAL_DIR"
     if [ -n "${CLINE_DATA_DIR:-}" ]; then
-        add_ai_root "cline=$CLINE_DATA_DIR"
+        add_env_ai_root CLINE_DATA_DIR cline "$CLINE_DATA_DIR"
     elif [ -n "${CLINE_DIR:-}" ]; then
-        add_ai_root "cline=${CLINE_DIR%/}/data"
+        add_env_ai_root CLINE_DIR cline "${CLINE_DIR%/}/data"
     fi
-    local history_var history_path
+    local history_var history_path problem=""
     for history_var in AIDER_CHAT_HISTORY_FILE AIDER_INPUT_HISTORY_FILE AIDER_LLM_HISTORY_FILE; do
         history_path="${!history_var:-}"
         [ -n "$history_path" ] || continue
         case "$history_path" in /*) ;; *) history_path="$(pwd -P)/$history_path" ;; esac
-        add_ai_root "aider-history=$history_path"
+        add_env_ai_root "$history_var" aider-history "$history_path"
     done
-    [ -z "${CLAUDE_CONFIG_DIR:-}" ] || add_ai_root "claude=$CLAUDE_CONFIG_DIR"
-    [ -z "${CODEX_HOME:-}" ] || add_ai_root "codex=$CODEX_HOME"
-    [ -z "${CODEX_SQLITE_HOME:-}" ] || add_ai_root "codex-db=$CODEX_SQLITE_HOME"
-    [ -z "${XDG_DATA_HOME:-}" ] || add_ai_root "opencode=${XDG_DATA_HOME%/}/opencode"
-    [ -z "${XDG_STATE_HOME:-}" ] || add_ai_root "opencode-state=${XDG_STATE_HOME%/}/opencode"
+    [ -z "${CLAUDE_CONFIG_DIR:-}" ] || add_env_ai_root CLAUDE_CONFIG_DIR claude "$CLAUDE_CONFIG_DIR"
+    [ -z "${CODEX_HOME:-}" ] || add_env_ai_root CODEX_HOME codex "$CODEX_HOME"
+    [ -z "${CODEX_SQLITE_HOME:-}" ] || add_env_ai_root CODEX_SQLITE_HOME codex-db "$CODEX_SQLITE_HOME"
+    [ -z "${XDG_DATA_HOME:-}" ] || add_env_ai_root XDG_DATA_HOME opencode "${XDG_DATA_HOME%/}/opencode"
+    [ -z "${XDG_STATE_HOME:-}" ] || add_env_ai_root XDG_STATE_HOME opencode-state "${XDG_STATE_HOME%/}/opencode"
     AI_CLAUDE_TMP_BASE="${CLAUDE_CODE_TMPDIR:-/private/tmp}"
     AI_CLAUDE_TMP_BASE="${AI_CLAUDE_TMP_BASE%/}"
     case "$AI_CLAUDE_TMP_BASE" in
         /tmp|/tmp/*) AI_CLAUDE_TMP_BASE="/private$AI_CLAUDE_TMP_BASE" ;;
     esac
     case "$AI_CLAUDE_TMP_BASE/" in
-        *'/../'*|*'/./'*|*'//'*) usage_error "CLAUDE_CODE_TMPDIR must be normalized" ;;
+        *'/../'*|*'/./'*|*'//'*) problem="must be normalized" ;;
     esac
     case "$AI_CLAUDE_TMP_BASE" in
-        *$'\n'*|*$'\r'*|*$'\t'*) usage_error "CLAUDE_CODE_TMPDIR must not contain control whitespace" ;;
+        *$'\n'*|*$'\r'*|*$'\t'*) problem="must not contain control whitespace" ;;
     esac
-    case "$AI_CLAUDE_TMP_BASE" in
-        /private/tmp|/private/tmp/*|/private/var/folders/*|/Users/*/*) ;;
-        *) usage_error "unsupported CLAUDE_CODE_TMPDIR; use a home or macOS temp directory" ;;
-    esac
+    if [ -z "$problem" ]; then
+        case "$AI_CLAUDE_TMP_BASE" in
+            /private/tmp|/private/tmp/*|/private/var/folders/*|/Users/*/*) ;;
+            *) problem="is unsupported; use a home or macOS temp directory" ;;
+        esac
+    fi
+    if [ -n "$problem" ]; then
+        log_warn "ai: ignoring CLAUDE_CODE_TMPDIR: it $problem; using /private/tmp"
+        [ "$DRY_RUN" -eq 1 ] || FAILED_COUNT=$((FAILED_COUNT + 1))
+        AI_CLAUDE_TMP_BASE=/private/tmp
+    fi
     if [ -n "${OPENCODE_DB:-}" ] && [ "$OPENCODE_DB" != :memory: ]; then
         case "$OPENCODE_DB" in
-            /*) add_ai_root "opencode-db=$OPENCODE_DB" ;;
-            *) add_ai_root "opencode-db=${XDG_DATA_HOME:-${HOME}/.local/share}/opencode/$OPENCODE_DB" ;;
+            /*) add_env_ai_root OPENCODE_DB opencode-db "$OPENCODE_DB" ;;
+            *) add_env_ai_root OPENCODE_DB opencode-db "${XDG_DATA_HOME:-${HOME}/.local/share}/opencode/$OPENCODE_DB" ;;
         esac
     fi
 }

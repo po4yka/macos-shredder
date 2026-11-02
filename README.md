@@ -985,7 +985,9 @@ The root-kind table below lists the standard locations. Real runs also read
 `OPENCODE_DB`, `CLAUDE_CODE_TMPDIR`, `CONTINUE_GLOBAL_DIR`, `CLINE_DATA_DIR`,
 `CLINE_DIR`, `AIDER_CHAT_HISTORY_FILE`, `AIDER_INPUT_HISTORY_FILE`, and
 `AIDER_LLM_HISTORY_FILE` from the invoking environment. Relative Aider history
-overrides are resolved against the invocation directory.
+overrides are resolved against the invocation directory. A variable that
+names a location outside an eligible home is reported and ignored, and the
+real run exits `2`; it does not stop the other modules.
 `sudo` can remove these variables. Shell startup files and agent configuration
 files are not executed or parsed to find overrides. For settings stored there,
 or for another user's custom locations, pass explicit roots:

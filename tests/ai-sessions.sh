@@ -354,6 +354,15 @@ test_environment_roots() (
     [ "${AI_ROOTS[0]}" = 'claude=/Users/User Space/custom claude' ]
     [ "${AI_ROOTS[5]}" = 'opencode-db=/Users/User Space/data/opencode/channel.db' ]
     [ "$AI_CLAUDE_TMP_BASE" = /private/tmp/custom ]
+    # Unrelated shell settings are reported and ignored; they do not abort.
+    AI_ROOTS=(); FAILED_COUNT=0
+    XDG_DATA_HOME=/opt/data
+    CLAUDE_CODE_TMPDIR=/var/tmp
+    unset OPENCODE_DB
+    ai_environment_roots 2>/dev/null
+    [ "${#AI_ROOTS[@]}" -eq 4 ]
+    [ "$AI_CLAUDE_TMP_BASE" = /private/tmp ]
+    [ "$FAILED_COUNT" -eq 2 ]
 )
 test_environment_roots
 printf 'PASS: environment overrides resolve paths and are ignored in sandbox mode\n'
