@@ -17,6 +17,7 @@
 #   L  SQLite discovery    KnowledgeC inspection errors fail closed
 #   M  Spotlight result    native dry-run reports its requested operation
 #   N  cache parent race   a replaced cache parent cannot redirect deletion
+#   O  Firefox failures    database errors cannot delete bookmarks
 #
 # Exit codes: 0 all phases passed; 1 one or more phases failed;
 #             77 shredder.sh not built yet.
@@ -55,6 +56,11 @@ if [ ! -f "$SHREDDER" ]; then
   exit 77
 fi
 
+if ! command -v sqlite3 >/dev/null 2>&1; then
+  info 'sqlite3 is required to verify Firefox bookmark preservation'
+  exit 1
+fi
+
 WORK="$(mktemp -d)"
 info "work dir: $WORK"
 
@@ -72,6 +78,7 @@ RES_K='FAIL'
 RES_L='FAIL'
 RES_M='FAIL'
 RES_N='FAIL'
+RES_O='FAIL'
 
 phase_a_usage_validation() {
   local sb="$WORK/sandbox-a" log="$WORK/phase-a.log" rc=0 ok=1
@@ -383,6 +390,47 @@ STUB
     && grep -q 'Failed operations: 1' "$log"
 }
 
+phase_o_firefox_failures() {
+  local sb="$WORK/sandbox-o" bin="$WORK/phase-o-bin" log="$WORK/phase-o.log"
+  local db original="$WORK/phase-o-original.db" scenario cmd rc ok=1
+  local before="$WORK/phase-o-before.sql" after="$WORK/phase-o-after.sql"
+  bash "$CREATE_ARTIFACTS" "$sb" >"$WORK/phase-o-create.log" || return 1
+  rm -f -- "$sb/Users/alice/Library/Application Support/Chromium/Default"
+  db="$sb/Users/alice/Library/Application Support/Firefox/Profiles/abcd1234.work/places.sqlite"
+  cp "$db" "$original" || return 1
+  for scenario in schema transaction; do
+    cp "$original" "$db" || return 1
+    if [ "$scenario" = schema ]; then
+      sqlite3 "$db" 'DROP TABLE moz_inputhistory;' || return 1
+    else
+      # This error occurs after visit deletion. The transaction must roll back.
+      sqlite3 "$db" "CREATE TRIGGER deny_delete BEFORE DELETE ON moz_places
+        BEGIN SELECT RAISE(ABORT, 'test transaction failure'); END;" || return 1
+    fi
+    sqlite3 "$db" .dump > "$before" || return 1
+    rc=0
+    SHREDDER_ROOT="$sb" bash "$SHREDDER" --force --modules browser >"$log" 2>&1 || rc=$?
+    [ "$rc" -eq 2 ] || ok=0
+    sqlite3 "$db" .dump > "$after" || return 1
+    cmp -s "$before" "$after" || ok=0
+    info "Firefox $scenario failure exit: $rc (expected 2); database must be unchanged"
+  done
+  # Use real tools on a PATH without sqlite3. There must be no delete fallback.
+  cp "$original" "$db" || return 1
+  mkdir -p "$bin"
+  for cmd in tr find stat id; do
+    ln -s "$(command -v "$cmd")" "$bin/$cmd" || return 1
+  done
+  rc=0
+  PATH="$bin" SHREDDER_ROOT="$sb" \
+    /bin/bash "$SHREDDER" --force --modules browser >"$log" 2>&1 || rc=$?
+  [ "$rc" -eq 2 ] || ok=0
+  cmp -s "$original" "$db" || ok=0
+  grep -q 'sqlite3 unavailable; preserving Firefox Places database' "$log" || ok=0
+  info "Firefox without SQLite exit: $rc (expected 2); database must be unchanged"
+  [ "$ok" -eq 1 ]
+}
+
 preserve_failure_artifacts() {
   local dest="$REPO_ROOT/tests-last-run"
   mkdir -p "$dest"
@@ -446,6 +494,10 @@ info '=== PHASE N: cache parent race ==='
 if phase_n_cache_parent_race; then RES_N='PASS'; fi
 info "PHASE N result: $RES_N"
 
+info '=== PHASE O: Firefox failure safety ==='
+if phase_o_firefox_failures; then RES_O='PASS'; fi
+info "PHASE O result: $RES_O"
+
 info '================ SUMMARY ================'
 info "A usage-validation : $RES_A"
 info "B module-listing   : $RES_B"
@@ -461,9 +513,10 @@ info "K trusted-path    : $RES_K"
 info "L sqlite-discovery: $RES_L"
 info "M spotlight-result: $RES_M"
 info "N cache-parent-race: $RES_N"
+info "O firefox-failures: $RES_O"
 
 overall=0
-for r in "$RES_A" "$RES_B" "$RES_C" "$RES_D" "$RES_E" "$RES_F" "$RES_G" "$RES_H" "$RES_I" "$RES_J" "$RES_K" "$RES_L" "$RES_M" "$RES_N"; do
+for r in "$RES_A" "$RES_B" "$RES_C" "$RES_D" "$RES_E" "$RES_F" "$RES_G" "$RES_H" "$RES_I" "$RES_J" "$RES_K" "$RES_L" "$RES_M" "$RES_N" "$RES_O"; do
   [ "$r" = 'PASS' ] || overall=1
 done
 if [ "$overall" -ne 0 ]; then

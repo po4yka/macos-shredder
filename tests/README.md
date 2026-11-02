@@ -9,7 +9,7 @@ Files:
 
 | Script                 | Role                                                        |
 | ---------------------- | ----------------------------------------------------------- |
-| `run-tests.sh`         | orchestrator — runs phases A–N, reports PASS/FAIL per phase |
+| `run-tests.sh`         | orchestrator — runs phases A–O, reports PASS/FAIL per phase |
 | `create-artifacts.sh`  | builds the deterministic sandbox fixture tree (+ manifest)  |
 | `verify-cleanup.sh`    | asserts post-cleaning state (`force`) or byte-stability (`dryrun`) |
 | `README.md`            | this document                                               |
@@ -40,21 +40,22 @@ System-level fixtures:
 - `private/var/folders/xx/yy/C/com.apple.notificationcenter/db2/db.db` and
   `…/com.apple.QuickLook.thumbnailcache/thumb.jpg`.
 - `private/var/db/CoreDuet/Knowledge/knowledgeC.db` — a real SQLite database
-  (tables `ZOBJECT` and `ZSTRUCTUREDMETADATA`, each holding a marker row) when
-  `sqlite3` is available, otherwise a plain text file carrying the marker.
+  (tables `ZOBJECT` and `ZSTRUCTUREDMETADATA`, each holding a marker row).
 
 Per-user fixtures:
 
 - Shell histories: `.zsh_history`, `.bash_history`, `.bash_sessions/`, and
   `.ipython/profile_default/history.sqlite` with WAL/SHM/journal sidecars.
 - `Library/Preferences/com.apple.LaunchServices.QuarantineEventsV2` — real
-  SQLite (`LSQuarantineEvent` table + marker row) or text stand-in.
+  SQLite (`LSQuarantineEvent` table + marker row).
 - Safari: `History.db` with `-wal` / `-shm` sidecars, plists, cache file, and
   both container and legacy cookie stores.
 - Chrome: `Default` and `Profile 1`; an intermediate Chromium profile symlink
   points outside the user home and must be refused.
 - Firefox: a custom-named profile proves cleanup does not depend on `default`
-  appearing in the profile directory name.
+  appearing in the profile directory name. Its real Places database contains
+  history, bookmarks, a bookmark folder, and a keyword. Cleanup must remove
+  history and preserve the saved references, including a stale bookmark counter.
 - Per-user KnowledgeC and Shared File List recent-item stores. Non-recent
   favorites must survive.
 - Trash: `.Trash/file.txt` **and** `.Trash/.hidden-leak` (hidden file proves
@@ -128,6 +129,9 @@ Exit codes: `run-tests.sh` → `0` all phases passed, `1` any phase failed,
   the path check. Cleanup must return `2` and preserve both the outside file
   and the original cache entry. Phase H also checks owner-UID execution for
   files under `/private/var/folders`.
+- **O — Firefox failure safety**: an unsupported schema and a transaction error
+  must return `2` with the database contents unchanged. Without SQLite on PATH,
+  cleanup must preserve the database bytes and report failure.
 
 ## Requirements
 
@@ -136,9 +140,8 @@ Exit codes: `run-tests.sh` → `0` all phases passed, `1` any phase failed,
   GNU variants both work (file sizes via `stat -c%s` with `stat -f%z`
   fallback)
 - `shasum` **or** `sha256sum` for manifests/hashes
-- optional `sqlite3`: enables real database fixtures and exact marker-row
-  assertions; without it both fixture creation and verification degrade to
-  marked text files consistently
+- `sqlite3`: required for real Firefox Places fixtures, bookmark preservation,
+  transaction rollback, and database integrity checks
 - no root privileges anywhere
 
 ## CI integration

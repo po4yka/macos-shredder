@@ -204,6 +204,36 @@ check_knowledge_db() { # check_knowledge_db <desc> <db-path>
   fi
 }
 
+check_firefox_places() {
+  local desc="$1" db="$2" result
+  if [ ! -f "$db" ]; then
+    fail "$desc" 'preserved Places database' 'missing database'
+    return
+  fi
+  if ! result=$(sqlite3 -bail "$db" "
+    SELECT COUNT(*) FROM moz_historyvisits;
+    SELECT COUNT(*) FROM moz_inputhistory;
+    SELECT COUNT(*) FROM moz_places_metadata;
+    SELECT COUNT(*) FROM moz_places WHERE id = 2;
+    SELECT COUNT(*) FROM moz_origins WHERE id = 2;
+    SELECT COUNT(*) FROM moz_places WHERE visit_count <> 0 OR last_visit_date IS NOT NULL OR typed <> 0;
+    SELECT COUNT(*) FROM moz_bookmarks b JOIN moz_places p ON p.id = b.fk
+      WHERE (b.guid = 'saved-guid' AND p.url = 'https://saved.example.invalid/bookmark')
+         OR (b.guid = 'stale-guid' AND p.url = 'https://saved.example.invalid/stale-counter');
+    SELECT COUNT(*) FROM moz_bookmarks WHERE fk IS NULL AND title = 'Folder';
+    SELECT COUNT(*) FROM moz_keywords k JOIN moz_places p ON p.id = k.place_id
+      WHERE k.keyword = 'saved-keyword' AND p.url = 'https://saved.example.invalid/keyword';
+    SELECT COUNT(*) FROM moz_annos WHERE content = 'saved annotation';
+    PRAGMA integrity_check;
+    PRAGMA foreign_key_check;" 2>/dev/null); then
+    fail "$desc" 'valid Places database' 'SQLite query failed'
+  elif [ "$result" = $'0\n0\n0\n0\n0\n0\n2\n1\n1\n1\nok' ]; then
+    pass "$desc"
+  else
+    fail "$desc" 'history cleared; bookmarks, folder and keyword preserved' "$result"
+  fi
+}
+
 check_user_artifacts_cleaned() { # check_user_artifacts_cleaned <label> <home>
   local label="$1" home="$2"
 
@@ -226,7 +256,7 @@ check_user_artifacts_cleaned() { # check_user_artifacts_cleaned <label> <home>
   check_gone "$label: Safari container cookies gone" \
     "$home/Library/Containers/com.apple.Safari/Data/Library/Cookies/Cookies.binarycookies"
   check_gone "$label: Safari legacy cookies gone" "$home/Library/Cookies/Cookies.binarycookies"
-  check_gone "$label: Firefox custom-profile history gone" \
+  check_firefox_places "$label: Firefox history cleared without bookmark loss" \
     "$home/Library/Application Support/Firefox/Profiles/abcd1234.work/places.sqlite"
   check_gone "$label: Firefox custom-profile cache gone" \
     "$home/Library/Application Support/Firefox/Profiles/abcd1234.work/cache2/cache.data"

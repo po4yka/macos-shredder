@@ -1119,6 +1119,63 @@ CHROME_BROWSERS
     return 0
 }
 
+# Places also stores bookmarks and keywords. Never remove this database or
+# its sidecars, including when SQLite is unavailable or the schema is unknown.
+purge_firefox_history() {
+    local db="$1" sqlite_bin tables sql
+    guard_mutation_target "$db" || return 0
+    [ -f "$db" ] || return 0
+    if [ "$DRY_RUN" -eq 1 ]; then
+        log_debug "[DRY RUN] would clear Firefox history and preserve bookmarks: $db"
+        CLEANED_COUNT=$((CLEANED_COUNT + 1))
+        return 0
+    fi
+    sqlite_bin="$(command -v sqlite3 2>/dev/null || true)"
+    if [ -z "$sqlite_bin" ]; then
+        log_warn "sqlite3 unavailable; preserving Firefox Places database: $db"
+        FAILED_COUNT=$((FAILED_COUNT + 1))
+        return 0
+    fi
+    if ! tables="$(run_target_command "$db" "$sqlite_bin" -readonly "$db" \
+        "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('moz_places_metadata','moz_origins');" 2>/dev/null)"; then
+        log_warn "failed to inspect Firefox Places database: $db"
+        FAILED_COUNT=$((FAILED_COUNT + 1))
+        return 0
+    fi
+    # Firefox uses foreign_count for bookmark and keyword references. Check
+    # bookmarks directly as well, so a stale counter cannot delete their URLs.
+    # Its visit-count triggers are temporary; update those fields explicitly.
+    sql="PRAGMA secure_delete=ON; PRAGMA foreign_keys=ON; BEGIN IMMEDIATE;"
+    case "$tables" in
+        *moz_places_metadata*) sql="$sql DELETE FROM moz_places_metadata;" ;;
+    esac
+    sql="$sql
+        DELETE FROM moz_historyvisits;
+        DELETE FROM moz_inputhistory;
+        DELETE FROM moz_annos WHERE place_id IN (
+            SELECT id FROM moz_places WHERE foreign_count = 0
+            AND NOT EXISTS (SELECT 1 FROM moz_bookmarks WHERE fk = moz_places.id));
+        DELETE FROM moz_places WHERE foreign_count = 0
+            AND NOT EXISTS (SELECT 1 FROM moz_bookmarks WHERE fk = moz_places.id);
+        UPDATE moz_places SET visit_count = 0, last_visit_date = NULL,
+            typed = 0, frecency = -1;"
+    case "$tables" in
+        *moz_origins*) sql="$sql DELETE FROM moz_origins WHERE NOT EXISTS (
+            SELECT 1 FROM moz_places WHERE origin_id = moz_origins.id);" ;;
+    esac
+    sql="$sql COMMIT; VACUUM; PRAGMA wal_checkpoint(TRUNCATE);"
+    # -bail stops at the first SQL error. Closing an uncommitted transaction
+    # rolls it back, rather than leaving only part of the history removed.
+    if run_target_command "$db" "$sqlite_bin" -batch -bail "$db" "$sql" >/dev/null 2>&1; then
+        log_debug "cleared Firefox history; bookmarks preserved: $db"
+        CLEANED_COUNT=$((CLEANED_COUNT + 1))
+    else
+        log_warn "failed to clear Firefox history; database retained: $db"
+        FAILED_COUNT=$((FAILED_COUNT + 1))
+    fi
+    return 0
+}
+
 clean_firefox_for_home() {
     local h="$1"
     local profiles="$h/Library/Application Support/Firefox/Profiles"
@@ -1131,9 +1188,7 @@ clean_firefox_for_home() {
     for prof in "$profiles"/*/; do
         [ -d "$prof" ] || continue
         if [ "$skip_dbs" -eq 0 ]; then
-            remove_path "$prof/places.sqlite"
-            remove_path "$prof/places.sqlite-wal"
-            remove_path "$prof/places.sqlite-shm"
+            purge_firefox_history "$prof/places.sqlite"
             remove_path "$prof/cookies.sqlite"
             remove_path "$prof/cookies.sqlite-wal"
             remove_path "$prof/cookies.sqlite-shm"

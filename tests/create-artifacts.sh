@@ -6,9 +6,8 @@
 # Usage: create-artifacts.sh <SANDBOX_ROOT> [--manifest <FILE>]
 #
 # Builds the full sandbox layout described in tests/README.md. Idempotent:
-# safe to re-run over an existing sandbox. SQLite-backed fixtures are only
-# produced when sqlite3 is available; otherwise plain-text stand-ins carrying
-# the same markers are written.
+# safe to re-run over an existing sandbox. SQLite is required for the Firefox
+# bookmark fixtures.
 
 set -euo pipefail
 export LC_ALL=C
@@ -97,6 +96,37 @@ SQL
   fi
 }
 
+make_firefox_places_db() {
+  local db="$1"
+  reset_db_sidecars "$db"
+  sqlite3 "$db" <<'SQL'
+CREATE TABLE moz_origins (id INTEGER PRIMARY KEY, host TEXT);
+CREATE TABLE moz_places (id INTEGER PRIMARY KEY, url TEXT, foreign_count INTEGER,
+  visit_count INTEGER, last_visit_date INTEGER, typed INTEGER, frecency INTEGER,
+  origin_id INTEGER REFERENCES moz_origins(id));
+CREATE TABLE moz_bookmarks (id INTEGER PRIMARY KEY, fk INTEGER REFERENCES moz_places(id),
+  title TEXT, parent INTEGER, position INTEGER, guid TEXT);
+CREATE TABLE moz_keywords (id INTEGER PRIMARY KEY, place_id INTEGER REFERENCES moz_places(id), keyword TEXT);
+CREATE TABLE moz_historyvisits (id INTEGER PRIMARY KEY, place_id INTEGER REFERENCES moz_places(id), visit_date INTEGER);
+CREATE TABLE moz_inputhistory (place_id INTEGER REFERENCES moz_places(id), input TEXT);
+CREATE TABLE moz_annos (id INTEGER PRIMARY KEY, place_id INTEGER REFERENCES moz_places(id), content TEXT);
+CREATE TABLE moz_places_metadata (id INTEGER PRIMARY KEY, place_id INTEGER REFERENCES moz_places(id));
+INSERT INTO moz_origins VALUES (1, 'saved.example.invalid'), (2, 'history.example.invalid');
+INSERT INTO moz_places VALUES
+  (1, 'https://saved.example.invalid/bookmark', 1, 2, 700000000, 1, 100, 1),
+  (2, 'https://history.example.invalid/SHREDTEST-HIST', 0, 3, 700000001, 1, 200, 2),
+  (3, 'https://saved.example.invalid/keyword', 1, 1, 700000002, 1, 150, 1),
+  (4, 'https://saved.example.invalid/stale-counter', 0, 1, 700000003, 1, 50, 1);
+INSERT INTO moz_bookmarks VALUES (1, NULL, 'Folder', 0, 0, 'folder-guid'),
+  (2, 1, 'Saved bookmark', 1, 0, 'saved-guid'), (3, 4, 'Stale counter bookmark', 1, 1, 'stale-guid');
+INSERT INTO moz_keywords VALUES (1, 3, 'saved-keyword');
+INSERT INTO moz_historyvisits VALUES (1, 1, 700000000), (2, 2, 700000001), (3, 3, 700000002);
+INSERT INTO moz_inputhistory VALUES (1, 'saved query'), (2, 'history query');
+INSERT INTO moz_annos VALUES (1, 1, 'saved annotation'), (2, 2, 'download trace');
+INSERT INTO moz_places_metadata VALUES (1, 1), (2, 2);
+SQL
+}
+
 build_user_home() { # build_user_home <home-dir>
   local home="$1"
 
@@ -140,7 +170,7 @@ build_user_home() { # build_user_home <home-dir>
   # contain "default".
   local firefox="$home/Library/Application Support/Firefox/Profiles/abcd1234.work"
   mkdir -p "$firefox/cache2"
-  printf 'firefox history %s\n' "$MARK_HIST" > "$firefox/places.sqlite"
+  make_firefox_places_db "$firefox/places.sqlite"
   printf 'firefox cache %s\n' "$MARK_OWN" > "$firefox/cache2/cache.data"
 
   # --- launch services quarantine ---------------------------------------------

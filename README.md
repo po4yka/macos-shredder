@@ -16,6 +16,9 @@ browser data, usage databases, caches, Trash, and related activity traces.
 - macOS services can recreate caches, indexes, and databases after cleanup.
 - Close browsers before the `browser` module. The script skips active browser
   databases to avoid corruption.
+- Firefox history cleanup preserves bookmarks and keywords in `places.sqlite`.
+  If SQLite is unavailable or cleanup fails, the database is retained and the
+  run reports a failure.
 
 ## Quick start
 
