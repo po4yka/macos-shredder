@@ -601,7 +601,8 @@ test_json_cleanup_keeps_mode() (
     ai_clean_json "$file" claude
     [ "$CLEANED_COUNT" -eq 1 ]
     if grep -q secret "$file"; then return 1; fi
-    [ "$(stat -f %Lp "$file" 2>/dev/null || stat -c %a "$file")" = 644 ]
+    # GNU stat prints file-system data for -f, so try the GNU form first.
+    [ "$(stat -c %a "$file" 2>/dev/null || stat -f %Lp "$file")" = 644 ]
 )
 test_json_cleanup_keeps_mode
 printf 'PASS: JSON cleanup keeps the file mode\n'
