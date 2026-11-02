@@ -14,7 +14,10 @@ run_case() {
     : > "$root/.macos-shredder-test-root"
     printf 'history\n' > "$root/Users/alice/.bash_history"
     printf 'trash\n' > "$root/Users/alice/.Trash/entry"
-    SHREDDER_ROOT="$root" /bin/bash -s -- "$SHREDDER" "$mode" > "$log" 2>&1 <<'DRIVER' || rc=$?
+    # A non-interactive Bash cannot trap a signal that was ignored when it
+    # started (for example, in a background job). Reset SIGINT first.
+    SHREDDER_ROOT="$root" perl -e '$SIG{INT} = "DEFAULT"; exec @ARGV or die' \
+        /bin/bash -s -- "$SHREDDER" "$mode" > "$log" 2>&1 <<'DRIVER' || rc=$?
 source "$1"
 mode="$2"
 if [ "$mode" = state-init ]; then
