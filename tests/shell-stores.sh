@@ -79,6 +79,20 @@ test_atuin() (
 test_atuin
 printf 'PASS: Atuin local/history records and pack manifests cleared; auth/configuration preserved\n'
 
+test_atuin_analyzed() (
+    setup atuin-analyzed
+    local root="$STORE_HOME/.local/share/atuin"
+    seed_atuin "$root"
+    # ANALYZE adds sqlite_stat1, which has no tag column.
+    sqlite3 "$root/records.db" 'CREATE INDEX store_tag ON store(tag); ANALYZE;'
+    sqlite3 "$root/history.db" 'CREATE INDEX history_cwd ON history(cwd); ANALYZE;'
+    expect_status 0 --force
+    [ "$(sqlite3 "$root/records.db" 'SELECT count(*) FROM store; SELECT count(*) FROM records;')" = $'4\n1' ]
+    [ "$(sqlite3 "$root/history.db" 'SELECT count(*) FROM history;')" = 0 ]
+)
+test_atuin_analyzed
+printf 'PASS: analyzed Atuin databases are cleaned\n'
+
 test_alternatives() (
     setup alternatives
     local entry root

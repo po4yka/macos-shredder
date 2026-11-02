@@ -1529,7 +1529,8 @@ INSERT INTO shredder_check SELECT COUNT(*)=0 FROM sqlite_master WHERE type='trig
     for table in $deletes; do
         case $'\n'"$tables"$'\n' in *$'\n'"$table"$'\n'*) ;; *) continue ;; esac
         condition=1
-        if [ "$flavor" = atuin-records ]; then
+        # Statistics tables have no tag column; clear them without the check.
+        if [ "$flavor" = atuin-records ] && [ "${table#sqlite_stat}" = "$table" ]; then
             # Version 001 packfile manifests are plaintext JSON with a three-byte
             # prefix. Other tags can contain user configuration and stay intact.
             sql="$sql
