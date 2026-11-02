@@ -77,6 +77,7 @@ METADATA_FILES=()
 VERSION_FILES=()
 SPELLING_WORDS=()
 AI_ROOTS=()
+DEVICE_BACKUPS=()
 DIAGNOSTIC_EXPORTS=()
 AI_CLAUDE_TMP_BASE=/private/tmp
 TEST_MODE=0
@@ -131,6 +132,7 @@ MODULE_IDS=(
     activity
     siri
     diagnosticexports
+    devicebackups
     mailhistory
     locationhistory
     callhistory
@@ -168,6 +170,7 @@ MODULE_DESCS=(
     "Known activity stores; reports unsupported stores (explicit only)"
     "Siri and Dictation deletion instructions (manual action required)"
     "Selected completed diagnostic exports"
+    "Selected completed unencrypted device backups"
     "Mail recipients and attachments (manual action required)"
     "Maps searches and significant locations (manual action required)"
     "Phone and FaceTime call history (manual action required)"
@@ -769,6 +772,9 @@ Options:
       --diagnostic-export PATH
                         Select one completed sysdiagnose archive or .logarchive.
                         Requires diagnosticexports; repeat for more exports.
+      --device-backup PATH
+                        Selected completed unencrypted device backups.
+                        Requires devicebackups; repeat for more paths.
       --version-file PATH
                         Remove previous versions of one local file; retain its contents.
                         Requires --modules documentversions; repeat for more files.
@@ -951,6 +957,10 @@ parse_args() {
                 [ $# -ge 2 ] || usage_error "--diagnostic-export requires a path"
                 add_selected_artifact diagnosticexports "$2"; shift 2 ;;
             --diagnostic-export=*) add_selected_artifact diagnosticexports "${1#*=}"; shift ;;
+            --device-backup)
+                [ $# -ge 2 ] || usage_error "--device-backup requires a path"
+                add_selected_artifact devicebackups "$2"; shift 2 ;;
+            --device-backup=*) add_selected_artifact devicebackups "${1#*=}"; shift ;;
             --version-file)
                 [ $# -ge 2 ] || usage_error "--version-file requires a file"
                 add_version_file "$2"; shift 2
@@ -999,6 +1009,7 @@ parse_args() {
         usage_error "--metadata-file requires explicit --modules filemetadata"
     fi
     validate_selected_artifact_options diagnosticexports diagnostic-export "${#DIAGNOSTIC_EXPORTS[@]}"
+    validate_selected_artifact_options devicebackups device-backup "${#DEVICE_BACKUPS[@]}"
     if module_selected documentversions; then
         [ "${#VERSION_FILES[@]}" -gt 0 ] || usage_error "documentversions requires --version-file"
     elif [ "${#VERSION_FILES[@]}" -gt 0 ]; then
@@ -3724,6 +3735,7 @@ add_selected_artifact() {
     case "$user" in ''|Shared|Guest|.*) usage_error "ineligible artifact home" ;; esac
     case "$kind" in
         diagnosticexports) DIAGNOSTIC_EXPORTS+=("$path") ;;
+        devicebackups) DEVICE_BACKUPS+=("$path") ;;
     esac
 }
 
@@ -3819,6 +3831,49 @@ module_diagnosticexports() {
             selected_remove_path "$target"
         else
             selected_artifact_refuse diagnosticexports "$target"
+        fi
+    done
+}
+
+# A completed, unencrypted MobileSync backup has three property lists and the
+# current SQLite Files manifest. Older/encrypted formats require Finder.
+device_backup_valid() {
+    local target="$1" relative name identifier state encrypted columns
+    relative="${target#"$USERS_DIR"/}"; relative="${relative#*/}"
+    case "$relative" in 'Library/Application Support/MobileSync/Backup/'*) ;; *) return 1 ;; esac
+    name="${relative#Library/Application Support/MobileSync/Backup/}"
+    printf '%s\n' "$name" | grep -E '^([a-fA-F0-9]{40}|[a-fA-F0-9]{8}-[a-fA-F0-9]{16})(-[0-9]{8}-[0-9]{6})?$' >/dev/null || return 1
+    [ -d "$target" ] || return 1
+    local plist
+    for plist in Info Manifest Status; do
+        [ -f "$target/$plist.plist" ] || return 1
+        run_target_command "$target" /usr/bin/plutil -lint "$target/$plist.plist" >/dev/null 2>&1 || return 1
+    done
+    identifier="$(run_target_command "$target" /usr/bin/plutil -extract 'Target Identifier' raw -expect string -o - "$target/Info.plist" 2>/dev/null)" || return 1
+    [ "$name" = "$identifier" ] || case "$name" in "$identifier"-????????-??????) ;; *) return 1 ;; esac
+    state="$(run_target_command "$target" /usr/bin/plutil -extract SnapshotState raw -expect string -o - "$target/Status.plist" 2>/dev/null)" || return 1
+    [ "$state" = finished ] || return 1
+    encrypted="$(run_target_command "$target" /usr/bin/plutil -extract IsEncrypted raw -expect bool -o - "$target/Manifest.plist" 2>/dev/null)" || return 1
+    [ "$encrypted" = false ] || return 1
+    slack_export_sqlite_header "$target/Manifest.db" || return 1
+    for plist in -wal -shm -journal; do
+        [ ! -e "$target/Manifest.db$plist" ] || return 1
+    done
+    columns="$(run_target_command "$target" /usr/bin/sqlite3 -readonly -batch -bail "$target/Manifest.db" "SELECT group_concat(name, ',') FROM pragma_table_info('Files');" 2>/dev/null)" || return 1
+    [ "$columns" = fileID,domain,relativePath,flags,file ] || return 1
+    [ "$(run_target_command "$target" /usr/bin/sqlite3 -readonly -batch -bail "$target/Manifest.db" 'PRAGMA quick_check;' 2>/dev/null)" = ok ]
+}
+
+module_devicebackups() {
+    local requested target
+    for requested in ${DEVICE_BACKUPS[@]+"${DEVICE_BACKUPS[@]}"}; do
+        target="$SANDBOX$requested"
+        if selected_artifact_safe "$target" &&
+            selected_artifact_idle "$target" '(^|/)(AppleMobileBackup|mobilebackupd|MobileBackup|idevicebackup2|AMPDevicesAgent)$' &&
+            device_backup_valid "$target" && selected_artifact_safe "$target"; then
+            selected_remove_path "$target"
+        else
+            selected_artifact_refuse devicebackups "$target"
         fi
     done
 }
@@ -4494,7 +4549,7 @@ module_alfred() {
 
 module_selected() {
     if [ -z "$SELECTED_MODULES" ]; then
-        case "$1" in fsevents|clipboard|headless|slackexport|terminal|finderhistory|filemetadata|documentversions|spelling|notifications|activity|siri|mailhistory|locationhistory|callhistory|messagehistory|photometadata|alfred|diagnosticexports) return 1 ;; *) return 0 ;; esac
+        case "$1" in fsevents|clipboard|headless|slackexport|terminal|finderhistory|filemetadata|documentversions|spelling|notifications|activity|siri|mailhistory|locationhistory|callhistory|messagehistory|photometadata|alfred|devicebackups|diagnosticexports) return 1 ;; *) return 0 ;; esac
     fi
     case ",$SELECTED_MODULES," in
         *",$1,"*) return 0 ;;
@@ -4533,6 +4588,7 @@ run_module() {
         activity)    module_activity ;;
         siri)        module_siri ;;
         diagnosticexports) module_diagnosticexports ;;
+        devicebackups) module_devicebackups ;;
         mailhistory) module_mailhistory ;;
         locationhistory) module_locationhistory ;;
         callhistory) module_callhistory ;;

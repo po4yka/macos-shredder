@@ -160,6 +160,7 @@ recording, and shell history can independently retain records of a run.
 | `activity` | Explicit | Known KnowledgeC and IntelligencePlatform event/feedback tables; reports unsupported stores |
 | `siri` | Explicit; manual | Manual Siri/Dictation deletion instructions; real runs report incomplete |
 | `diagnosticexports` | Explicit paths | Completed selected sysdiagnose archives and native-validated log archives |
+| `devicebackups` | Explicit paths | Completed selected unencrypted MobileSync backups with validated manifests |
 | `mailhistory` | Explicit; manual | Mail recipients and attachments; instructions only, real runs report incomplete |
 | `locationhistory` | Explicit; manual | Maps searches and significant locations; instructions only, real runs report incomplete |
 | `callhistory` | Explicit; manual | Phone and FaceTime call history; instructions only, real runs report incomplete |
@@ -974,6 +975,22 @@ Deletion removes the selected local export, including its embedded logs. It does
 not remove copies sent to Apple, cloud copies or backups. Diagnostic exports can
 contain sensitive data. See [Apple diagnostics guidance](https://developer.apple.com/feedback-assistant/)
 and [Apple's log archive example](https://developer.apple.com/documentation/technotes/tn3163-understanding-the-synchronization-of-nspersistentcloudkitcontainer).
+
+### Selected device backups
+
+`devicebackups --device-backup PATH` deletes one explicitly selected, completed,
+unencrypted MobileSync backup. The path must identify a single device backup
+under `/Users/<user>/Library/Application Support/MobileSync/Backup/`. Repeat the
+option to select more backups. The identifier, required property lists, finished
+snapshot state and SQLite `Files` manifest must match the supported format.
+Active backup processes, database sidecars, unknown schemas, encrypted backups
+and older backup formats are refused. Disconnect devices and close backup or
+sync clients first. `--dry-run` performs read-only validation.
+
+This deletes a restore point, including device data and settings. It does not
+remove an iCloud backup. Use Finder's Manage Backups for unsupported formats.
+See [Apple's backup locations and management](https://support.apple.com/en-ie/108809)
+and the [MobileBackup2 implementation](https://github.com/libimobiledevice/libimobiledevice/blob/master/tools/idevicebackup2.c).
 
 ### Selected document versions
 

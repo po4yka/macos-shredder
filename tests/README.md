@@ -249,6 +249,10 @@ selected logical removals and preservation rules against the tested layouts.
 `diagnostic-exports.sh` checks exact export selection, archive identity, dry-run,
 invalid formats, symlinks, hard links and process-query refusal in temporary fixtures.
 
+`device-backups.sh` checks selected backup identity, finished state, encryption,
+manifest schema and dry-run with native plist and SQLite tools on macOS fixtures.
+Linux uses a plistlib adapter for the unavailable native plutil boundary.
+
 ### Document versions
 
 `bash tests/document-versions.sh` verifies explicit selection, path guards,
