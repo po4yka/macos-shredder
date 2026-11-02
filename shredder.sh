@@ -3248,6 +3248,10 @@ ELSE json_remove(doc,'$.history','$.lastSessionId') END FROM original;"
         trap '\''rm -f -- "$tmp"'\'' EXIT HUP INT TERM
         "$sqlite" -batch -bail -init /dev/null :memory: "$sql" > "$tmp" || exit 1
         [ -s "$tmp" ] || exit 1
+        # Keep the original permission bits. The atomic rename does not
+        # carry extended attributes or ACLs; these state files use neither.
+        mode=$(stat -f %Lp "$file" 2>/dev/null) || mode=$(stat -c %a "$file") || exit 1
+        chmod "$mode" "$tmp" || exit 1
         mv -f -- "$tmp" "$file"
     ' sh "$file" "$sqlite_bin" "$sql" >/dev/null 2>&1; then
         CLEANED_COUNT=$((CLEANED_COUNT + 1))

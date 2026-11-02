@@ -591,3 +591,17 @@ test_selected_artifact_home() (
 )
 test_selected_artifact_home
 printf 'PASS: selected artifacts outside an enumerated home are refused\n'
+
+test_json_cleanup_keeps_mode() (
+    setup_case json-mode
+    local file="$USERS_DIR/alice/.claude.json"
+    mkdir -p "$USERS_DIR/alice"
+    printf '{"history":["secret"],"theme":"dark"}\n' > "$file"
+    chmod 644 "$file"
+    ai_clean_json "$file" claude
+    [ "$CLEANED_COUNT" -eq 1 ]
+    if grep -q secret "$file"; then return 1; fi
+    [ "$(stat -f %Lp "$file" 2>/dev/null || stat -c %a "$file")" = 644 ]
+)
+test_json_cleanup_keeps_mode
+printf 'PASS: JSON cleanup keeps the file mode\n'
