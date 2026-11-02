@@ -4058,24 +4058,24 @@ selected_artifact_safe() {
     # An orphaned home of a deleted account is not an eligible home.
     eligible_home "$target" || return 1
     guard_mutation_target "$target" || return 1
-    # Validate all descendants as the home owner. find visits mount points but
-    # does not cross them; compare each device to reject those points as well.
+    # Validate all descendants as the home owner. One find pass rejects links,
+    # hard-linked files and special files; a device backup can hold hundreds
+    # of thousands of files, so do not run stat for each file. find visits
+    # mount points but does not cross them; compare each directory's device
+    # to reject those points as well.
     # shellcheck disable=SC2016
     run_target_command "$target" /bin/bash -c '
         set -e; set -o pipefail
         parent=${1%/*}; entry=${1##*/}
         cd -P "$parent"; [ "$(pwd -P)" = "$parent" ]
-        if [ "$(uname -s)" = Darwin ]; then stat_mode=-f; link_format=%l; else stat_mode=-c; link_format=%h; fi
+        if [ "$(uname -s)" = Darwin ]; then stat_mode=-f; else stat_mode=-c; fi
         device=$(stat "$stat_mode" %d .)
         [ "$(stat "$stat_mode" %d "$2")" = "$device" ]
-        find "./$entry" -xdev -print0 | while IFS= read -r -d "" item; do
-            [ ! -L "$item" ]
+        bad=$(find "./$entry" -xdev \( -type l -o \( -type f -links +1 \) \
+            -o \( ! -type f ! -type d \) \) -print -quit)
+        [ -z "$bad" ]
+        find "./$entry" -xdev -type d -print0 | while IFS= read -r -d "" item; do
             [ "$(stat "$stat_mode" %d "$item")" = "$device" ]
-            if [ -f "$item" ]; then
-                [ "$(stat "$stat_mode" "$link_format" "$item")" = 1 ]
-            else
-                [ -d "$item" ]
-            fi
         done
     ' sh "$target" "$home" >/dev/null 2>&1
 }

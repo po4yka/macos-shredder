@@ -676,3 +676,19 @@ test_unified_runs_last() (
 )
 test_unified_runs_last
 printf 'PASS: unified runs after the other selected modules\n'
+
+test_selected_artifact_tree_checks() (
+    setup_case artifact-tree
+    local target="$USERS_DIR/alice/Backups/backup"
+    mkdir -p "$target/aa"
+    printf 'x\n' > "$target/aa/file"
+    selected_artifact_safe "$target"
+    ln "$target/aa/file" "$WORK/artifact-hardlink"
+    if selected_artifact_safe "$target"; then return 1; fi
+    rm -f "$WORK/artifact-hardlink"
+    selected_artifact_safe "$target"
+    mkfifo "$target/aa/pipe"
+    if selected_artifact_safe "$target"; then return 1; fi
+)
+test_selected_artifact_tree_checks
+printf 'PASS: artifact checks reject nested hard links and special files\n'
