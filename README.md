@@ -102,6 +102,7 @@ home directories. There is no single-user selection option.
 | `--clipboard-current` | Also clear the verified active GUI user's current clipboard |
 | `--headless-days N` | Keep Chrome Headless profiles with changes in the last N days; default 7, range 1–99999 |
 | `--slack-export-root PATH` | Select a local Slack export directory; repeatable and required with `--modules slackexport` |
+| `--spelling-word WORD` | Unlearn one selected word in the active GUI account; repeatable, requires `spelling` |
 | `--version-file PATH` | Select one local document for previous-version removal; repeatable, requires `documentversions` |
 | `--metadata-file PATH` | Select one file for origin metadata cleanup; repeatable, requires `filemetadata` |
 | `--ai-root KIND=PATH` | Add a custom AI storage location; repeat for multiple roots |
@@ -152,6 +153,7 @@ recording, and shell history can independently retain records of a run.
 | `slackexport` | Explicit | Known data in explicitly selected local Slack exports |
 | `terminal` | Explicit | Terminal/iTerm2 saved output and explicitly selected session logs |
 | `finderhistory` | Explicit | Known Finder and Open/Save history keys |
+| `spelling` | Explicit | Selected learned words in the active GUI account |
 | `documentversions` | Explicit | Previous versions of selected local documents; current file stays |
 | `filemetadata` | Explicit | Origin metadata on explicitly selected files |
 | `notifications` | Explicit | Known delivered Notification Center history |
@@ -945,3 +947,28 @@ removal failure; the operation cannot restore versions already removed.
 Apple's [version-removal API](https://developer.apple.com/documentation/foundation/nsfileversion/removeotherversionsofitem(at:))
 requires coordinated writes and can create a missing file. The module checks
 that the selected file still exists before it calls this API.
+
+### Selected learned words
+
+`spelling --spelling-word WORD` removes only explicitly selected learned words
+through Apple's `NSSpellChecker`. Repeat the option for more words.
+
+```bash
+./shredder.sh --modules spelling --spelling-word exampleword --dry-run --debug
+```
+
+The module requires an eligible active console user and that user's GUI session.
+It runs the native API in that session as that user. It checks whether each word
+is learned before removal and checks again after removal. Dry-run only checks
+learned status. Duplicate words run once. Output does not print the words. The
+words still appear in your command line and can be retained by shell history.
+
+This removes selected spell-checker learned words only. It does not clear all
+keyboard history, predictive text, text replacements, passwords, third-party
+input-method dictionaries or remote copies. It does not delete dictionary
+files or reset preferences. Use System Settings to manage text replacements
+and the input method's own controls for other learned data.
+
+Apple documents [unlearnWord](https://developer.apple.com/documentation/appkit/nsspellchecker/unlearnword(_:))
+and [hasLearnedWord](https://developer.apple.com/documentation/appkit/nsspellchecker/haslearnedword(_:))
+as instance methods for selected words. No complete dictionary reset is claimed.

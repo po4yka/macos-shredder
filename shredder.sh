@@ -75,6 +75,7 @@ HEADLESS_DAYS=7
 SLACK_EXPORT_ROOTS=()
 METADATA_FILES=()
 VERSION_FILES=()
+SPELLING_WORDS=()
 AI_ROOTS=()
 AI_CLAUDE_TMP_BASE=/private/tmp
 TEST_MODE=0
@@ -124,6 +125,7 @@ MODULE_IDS=(
     finderhistory
     filemetadata
     documentversions
+    spelling
     notifications
     activity
     siri
@@ -158,6 +160,7 @@ MODULE_DESCS=(
     "Finder and Open/Save history keys (explicit selection only)"
     "Selected file origin metadata (explicit selection only)"
     "Previous versions of selected local documents (explicit only)"
+    "Selected learned words in the active GUI account (explicit only)"
     "Delivered notification history (explicit selection only)"
     "Known activity stores; reports unsupported stores (explicit only)"
     "Siri and Dictation deletion instructions (manual action required)"
@@ -761,6 +764,9 @@ Options:
       --version-file PATH
                         Remove previous versions of one local file; retain its contents.
                         Requires --modules documentversions; repeat for more files.
+      --spelling-word WORD
+                        Unlearn one selected word in the active GUI account.
+                        Requires --modules spelling; repeat for more words.
       --ai-root KIND=PATH
                         Add an AI storage location below /Users/<user>/.
                         Kinds: claude, codex, codex-db, opencode,
@@ -938,6 +944,11 @@ parse_args() {
                 add_version_file "$2"; shift 2
                 ;;
             --version-file=*) add_version_file "${1#*=}"; shift ;;
+            --spelling-word)
+                [ $# -ge 2 ] || usage_error "--spelling-word requires a word"
+                add_spelling_word "$2"; shift 2
+                ;;
+            --spelling-word=*) add_spelling_word "${1#*=}"; shift ;;
             --ai-root)
                 [ $# -ge 2 ] || usage_error "--ai-root requires KIND=PATH"
                 add_ai_root "$2"
@@ -979,6 +990,11 @@ parse_args() {
         [ "${#VERSION_FILES[@]}" -gt 0 ] || usage_error "documentversions requires --version-file"
     elif [ "${#VERSION_FILES[@]}" -gt 0 ]; then
         usage_error "--version-file requires explicit --modules documentversions"
+    fi
+    if module_selected spelling; then
+        [ "${#SPELLING_WORDS[@]}" -gt 0 ] || usage_error "spelling requires --spelling-word"
+    elif [ "${#SPELLING_WORDS[@]}" -gt 0 ]; then
+        usage_error "--spelling-word requires explicit --modules spelling"
     fi
     case "$HEADLESS_DAYS" in ''|*[!0-9]*|0*|??????*) usage_error "--headless-days must be between 1 and 99999" ;; esac
     if module_selected slackexport; then
@@ -4055,6 +4071,86 @@ module_documentversions() {
     return 0
 }
 
+# --- module: spelling -------------------------------------------------------
+
+add_spelling_word() {
+    local word="$1" existing
+    case "$word" in ''|*[[:space:][:cntrl:]]*) usage_error "--spelling-word requires one nonempty word without whitespace or control characters" ;; esac
+    [ "${#word}" -le 256 ] || usage_error "--spelling-word is too long"
+    for existing in ${SPELLING_WORDS[@]+"${SPELLING_WORDS[@]}"}; do
+        [ "$existing" != "$word" ] || return 0
+    done
+    SPELLING_WORDS+=("$word")
+}
+
+# Only the active console account is selected. Other users' dictionaries are
+# not files that can safely be reset or redirected with a substitute HOME.
+spelling_console_user() {
+    [ "$TEST_MODE" -eq 0 ] || return 1
+    local console_uid u h uid
+    console_uid="$(/usr/bin/stat -f '%u' /dev/console 2>/dev/null)" || return 1
+    case "$console_uid" in ''|0|*[!0-9]*) return 1 ;; esac
+    /bin/launchctl print "gui/$console_uid" >/dev/null 2>&1 || return 1
+    while IFS=$'\t' read -r u h uid; do
+        [ "$uid" = "$console_uid" ] || continue
+        guard_mutation_target "$h" || return 1
+        [ "$(/usr/bin/stat -f '%u' "$h")" = "$uid" ] || return 1
+        printf '%s\t%s\t%s\n' "$u" "$h" "$uid"
+        return 0
+    done < <(enumerate_users)
+    return 1
+}
+
+spelling_native() {
+    local home="$1" uid="$2" word="$3" dry_run="$4"
+    # Tests must replace this whole boundary. HOME does not isolate spellcheckd.
+    [ "$TEST_MODE" -eq 0 ] || return 1
+    [ "$(/usr/bin/stat -f '%u' /dev/console)" = "$uid" ] || return 1
+    [ "$(/usr/bin/stat -f '%u' "$home")" = "$uid" ] || return 1
+    /bin/launchctl print "gui/$uid" >/dev/null 2>&1 || return 1
+    /bin/launchctl asuser "$uid" /usr/bin/sudo -u "#$uid" -- \
+        /usr/bin/env HOME="$home" /usr/bin/osascript -l JavaScript - "$word" "$dry_run" <<'JXA'
+ObjC.import('AppKit');
+function run(argv) {
+    const checker = $.NSSpellChecker.sharedSpellChecker;
+    if (!checker || checker.isNil() ||
+        !checker.respondsToSelector('hasLearnedWord:') ||
+        !checker.respondsToSelector('unlearnWord:')) throw Error('spell checker unavailable');
+    if (!checker.hasLearnedWord(argv[0])) return 'none';
+    if (argv[1] === '1') return 'planned';
+    checker.unlearnWord(argv[0]);
+    if (checker.hasLearnedWord(argv[0])) throw Error('word is still learned');
+    return 'cleaned';
+}
+JXA
+}
+
+module_spelling() {
+    local account u h uid word result
+    account="$(spelling_console_user 2>/dev/null)" || {
+        log_warn "spelling: eligible active GUI user unavailable; no words changed"
+        FAILED_COUNT=$((FAILED_COUNT + 1)); return 0
+    }
+    IFS=$'\t' read -r u h uid <<< "$account"
+    for word in ${SPELLING_WORDS[@]+"${SPELLING_WORDS[@]}"}; do
+        result=''
+        if result="$(spelling_native "$h" "$uid" "$word" "$DRY_RUN" 2>/dev/null)"; then
+            # Do not print selected words, including in debug output.
+            case "$result" in
+                none) log_debug "spelling: selected word is not learned" ;;
+                planned|cleaned)
+                    CLEANED_COUNT=$((CLEANED_COUNT + 1))
+                    log_debug "spelling: $result one selected learned word" ;;
+                *) FAILED_COUNT=$((FAILED_COUNT + 1)); log_warn "spelling: unexpected native result" ;;
+            esac
+        else
+            log_warn "spelling: cannot verify removal of a selected word"
+            FAILED_COUNT=$((FAILED_COUNT + 1))
+        fi
+    done
+    return 0
+}
+
 # --- modules: notifications / activity / siri -------------------------------
 # System writers are not killed. An offline store is required: daemon restarts
 # can recreate data or hold stale Core Data state after direct SQLite cleanup.
@@ -4268,7 +4364,7 @@ module_photometadata() {
 
 module_selected() {
     if [ -z "$SELECTED_MODULES" ]; then
-        case "$1" in fsevents|clipboard|headless|slackexport|terminal|finderhistory|filemetadata|documentversions|notifications|activity|siri|mailhistory|locationhistory|callhistory|messagehistory|photometadata) return 1 ;; *) return 0 ;; esac
+        case "$1" in fsevents|clipboard|headless|slackexport|terminal|finderhistory|filemetadata|documentversions|spelling|notifications|activity|siri|mailhistory|locationhistory|callhistory|messagehistory|photometadata) return 1 ;; *) return 0 ;; esac
     fi
     case ",$SELECTED_MODULES," in
         *",$1,"*) return 0 ;;
@@ -4302,6 +4398,7 @@ run_module() {
         finderhistory) module_finderhistory ;;
         filemetadata) module_filemetadata ;;
         documentversions) module_documentversions ;;
+        spelling) module_spelling ;;
         notifications) module_notifications ;;
         activity)    module_activity ;;
         siri)        module_siri ;;

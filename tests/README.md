@@ -257,3 +257,14 @@ double and reports that the native check is unavailable.
 `manual-privacy.sh` checks explicit selection, manual-action notices, zero
 cleaned items, real exit `2`, dry-run exit `0`, and fixture preservation for
 manual privacy workflows. It never opens apps or performs their actions.
+
+
+### Selected learned words
+
+`bash tests/spelling.sh` tests explicit options, duplicate words, dry-run,
+selected-word removal, absent words, unavailable GUI sessions and native
+failures through a file-backed boundary double. The real AppKit mutation
+boundary always refuses test mode. On macOS the suite checks native selector
+availability without creating a spell checker or changing any learned words.
+A temporary HOME does not isolate the user's dictionary service, so the suite
+does not claim live dictionary mutation coverage.
