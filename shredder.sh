@@ -131,6 +131,7 @@ MODULE_IDS=(
     locationhistory
     callhistory
     messagehistory
+    photometadata
 )
 MODULE_DESCS=(
     "Shell and REPL histories, session data"
@@ -164,6 +165,7 @@ MODULE_DESCS=(
     "Maps searches and significant locations (manual action required)"
     "Phone and FaceTime call history (manual action required)"
     "Messages and recently deleted attachments (manual action required)"
+    "Photo location metadata (manual action required)"
 )
 
 # Color codes; filled by setup_colors(), left empty when colors are disabled.
@@ -4251,9 +4253,22 @@ module_messagehistory() {
     return 0
 }
 
+
+# Explicit guidance: no verified automatic backend for this private store.
+module_photometadata() {
+    log_warn 'photometadata: manual action required; no automatic cleanup was performed.'
+    log_warn 'photometadata: Photos: select photos, then Image > Location > Hide Location. Review location metadata on exported copies before sharing.'
+    log_warn 'photometadata: Hide Location can be reversed with Revert to Original Location. It is not proof that original GPS metadata or every copy was erased.'
+    log_warn 'photometadata: The filemetadata module clears only the WhereFroms attribute; it does not clear embedded EXIF/GPS metadata.'
+    log_warn 'photometadata: No photo library, image bytes, GPS metadata, album or iCloud Photos setting was changed.'
+    log_info 'photometadata: official instructions: https://support.apple.com/guide/photos/add-titles-captions-and-more-phta4e5a733f/mac'
+    [ "$DRY_RUN" -eq 1 ] || FAILED_COUNT=$((FAILED_COUNT + 1))
+    return 0
+}
+
 module_selected() {
     if [ -z "$SELECTED_MODULES" ]; then
-        case "$1" in fsevents|clipboard|headless|slackexport|terminal|finderhistory|filemetadata|documentversions|notifications|activity|siri|mailhistory|locationhistory|callhistory|messagehistory) return 1 ;; *) return 0 ;; esac
+        case "$1" in fsevents|clipboard|headless|slackexport|terminal|finderhistory|filemetadata|documentversions|notifications|activity|siri|mailhistory|locationhistory|callhistory|messagehistory|photometadata) return 1 ;; *) return 0 ;; esac
     fi
     case ",$SELECTED_MODULES," in
         *",$1,"*) return 0 ;;
@@ -4294,6 +4309,7 @@ run_module() {
         locationhistory) module_locationhistory ;;
         callhistory) module_callhistory ;;
         messagehistory) module_messagehistory ;;
+        photometadata) module_photometadata ;;
         *)
             log_warn "unknown module id in dispatch: $1"
             ;;

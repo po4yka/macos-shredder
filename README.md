@@ -161,6 +161,7 @@ recording, and shell history can independently retain records of a run.
 | `locationhistory` | Explicit; manual | Maps searches and significant locations; instructions only, real runs report incomplete |
 | `callhistory` | Explicit; manual | Phone and FaceTime call history; instructions only, real runs report incomplete |
 | `messagehistory` | Explicit; manual | Messages and recently deleted attachments; instructions only, real runs report incomplete |
+| `photometadata` | Explicit; manual | Photo location metadata; instructions only, real runs report incomplete |
 
 Mounted volumes are excluded by default. Use `--include-volumes` to include
 their FSEvents, `.DS_Store` data, and per-user Trash in the corresponding
@@ -570,6 +571,18 @@ buttons, change permissions, or mutate these stores. [Official instructions](htt
 A real run reports exit `2` and does not add cleaned items. A dry-run prints
 the guidance and normally returns `0`. The script does not open apps, click
 buttons, change permissions, or mutate these stores. [Official instructions](https://support.apple.com/en-euro/guide/messages/icht1035/26.0/mac/27).
+
+### Photo location metadata
+
+`photometadata` is an explicit manual workflow. Photos supports Hide Location and Revert to Original Location. This reversible app action is not an irreversible EXIF sanitizer. The module gives the supported action and asks the user to check exported copies; no image rewrite or library edit is attempted.
+
+```sh
+./shredder.sh --modules photometadata --dry-run
+```
+
+A real run reports exit `2` and does not add cleaned items. A dry-run prints
+the guidance and normally returns `0`. The script does not open apps, click
+buttons, change permissions, or mutate these stores. [Official instructions](https://support.apple.com/guide/photos/add-titles-captions-and-more-phta4e5a733f/mac).
 
 ## Browser site data and tab recovery
 
