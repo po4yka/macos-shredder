@@ -252,9 +252,10 @@ and backup/index clients can need a full rescan. See the installed macOS
 `FSEvents.h` API contract and `man log` for the native operation boundaries.
 
 `--purge-snapshots` enumerates local Time Machine snapshots and asks `diskutil`
-to delete each recognized snapshot. If `diskutil` is unavailable, it requests
-aggressive thinning through `tmutil`. This fallback is a request to reclaim
-space, not confirmation that every snapshot was removed. The flag does not
+to delete each recognized snapshot from the Data volume
+(`/System/Volumes/Data`), where Time Machine stores them. If `diskutil` is
+unavailable, it requests aggressive thinning through `tmutil`. This fallback
+is a request to reclaim space, not confirmation that every snapshot was removed. The flag does not
 delete Time Machine backup sets on external/network destinations, APFS
 snapshots from other tools, or cloud backup history.
 

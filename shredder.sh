@@ -1174,11 +1174,9 @@ purge_snapshots() {
     if ! command -v diskutil >/dev/null 2>&1; then
         log_debug "diskutil unavailable; using tmutil thinlocalsnapshots fallback"
         if [ "$DRY_RUN" -eq 1 ]; then
-            while IFS= read -r snap; do
-                [ -n "$snap" ] || continue
-                log_debug "[DRY RUN] would thin local snapshots (covering: $snap)"
-                CLEANED_COUNT=$((CLEANED_COUNT + 1))
-            done <<< "$snaps"
+            # The real run issues one thinning request, so count one item.
+            log_debug "[DRY RUN] would thin local snapshots: $(printf '%s' "$snaps" | tr '\n' ' ')"
+            CLEANED_COUNT=$((CLEANED_COUNT + 1))
         else
             if tmutil thinlocalsnapshots / 9999999999999 4 >/dev/null 2>&1; then
                 log_ok "requested aggressive thinning of local snapshots"
@@ -1190,14 +1188,20 @@ purge_snapshots() {
         fi
         return 0
     fi
+    # Time Machine local snapshots belong to the Data volume. Since macOS 10.15
+    # "/" is the sealed System volume, so diskutil must address the Data view.
+    local snapshot_volume=/
+    if [ -d "$DATA_VOLUME" ]; then
+        snapshot_volume="$DATA_VOLUME"
+    fi
     while IFS= read -r snap; do
         [ -n "$snap" ] || continue
         if [ "$DRY_RUN" -eq 1 ]; then
-            log_debug "[DRY RUN] would delete snapshot: $snap"
+            log_debug "[DRY RUN] would delete snapshot from $snapshot_volume: $snap"
             CLEANED_COUNT=$((CLEANED_COUNT + 1))
             continue
         fi
-        if diskutil apfs deleteSnapshot / -name "$snap" >/dev/null 2>&1; then
+        if diskutil apfs deleteSnapshot "$snapshot_volume" -name "$snap" >/dev/null 2>&1; then
             log_ok "deleted snapshot: $snap"
             CLEANED_COUNT=$((CLEANED_COUNT + 1))
         else
