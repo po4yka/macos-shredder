@@ -57,7 +57,7 @@ Dry-run and `--list` do not create logs.
 | `usage` | Per-user KnowledgeC, recent items, and Notification Center data |
 | `spotlight` | Spotlight erase-and-rebuild operation |
 | `quicklook` | Per-user Quick Look caches |
-| `trash` | Per-user Trash contents, including hidden files |
+| `trash` | Per-user Trash contents, including hidden files; mounted-volume Trash with `--include-volumes` |
 | `dsstore` | `.DS_Store` files in user homes |
 | `wifi` | Remembered Wi-Fi preference files and Wi-Fi logs |
 | `brew` | Homebrew caches and logs |
@@ -65,8 +65,20 @@ Dry-run and `--list` do not create logs.
 | `ai` | Local sessions for Claude Code, Codex, OpenCode, Cursor, Windsurf, Continue, Cline/Roo, and Aider |
 
 Mounted volumes are excluded by default. Use `--include-volumes` to include
-their FSEvents and `.DS_Store` data. Use `--purge-snapshots` only when you also
+their FSEvents, `.DS_Store` data, and per-user Trash. Use `--purge-snapshots` only when you also
 want to delete local Time Machine snapshots.
+
+For external Trash only, use `--modules trash --include-volumes`. The script
+empties `/Volumes/<mount>/.Trashes/<uid>` for each eligible local user. It
+preserves the Trash directory, other UID directories, and files outside Trash.
+It skips mount aliases and ordinary directories under `/Volumes`. It refuses
+linked Trash paths and owner mismatches, and runs deletion as the home owner
+without crossing nested mounts. Read-only volumes and permission failures
+produce exit code 2. Volumes with ownership disabled can fail the owner check;
+the script does not change mount permissions. Disconnected volumes, custom
+mount points, and Trash for users without an eligible local home are outside
+this scope. The per-UID layout is also used by the
+[macOS trash utility](https://github.com/morgant/tools-osx/blob/master/src/trash).
 
 ## AI sessions
 

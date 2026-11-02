@@ -221,6 +221,7 @@ guard_mutation_target() {
                 boundary="$USERS_DIR/${relative%%/*}"
                 ;;
             "$VAR_FOLDERS"/*) boundary="$VAR_FOLDERS" ;;
+            /Volumes/*) boundary="/Volumes" ;;
             *) return 0 ;;
         esac
     fi
@@ -1529,6 +1530,77 @@ module_quicklook() {
 }
 
 # --- module: trash -----------------------------------------------------------
+# macOS stat is used in real runs. The fallback permits GNU test hosts.
+trash_stat_number() {
+    local format="$1" target="$2" value
+    value="$(stat -f "$format" "$target" 2>/dev/null || true)"
+    case "$value" in
+        ''|*[!0-9]*) value="$(stat -c "$format" "$target" 2>/dev/null || true)" ;;
+    esac
+    case "$value" in ''|*[!0-9]*) return 1 ;; esac
+    printf '%s\n' "$value"
+}
+
+clean_volume_trash_for_home() {
+    local h="$1" uid="$2" owner vol trash owner_on_volume volume_device parent_device
+    owner="$(trash_stat_number %u "$h")" || {
+        log_warn "cannot identify Trash owner: $h"
+        [ "$DRY_RUN" -eq 1 ] || FAILED_COUNT=$((FAILED_COUNT + 1))
+        return 0
+    }
+    if { [ -n "$uid" ] && [ "$owner" != "$uid" ]; } \
+        || { [ "$TEST_MODE" -eq 0 ] && [ "$owner" -eq 0 ]; }; then
+        log_warn "refusing inconsistent or root Trash owner: $h"
+        [ "$DRY_RUN" -eq 1 ] || FAILED_COUNT=$((FAILED_COUNT + 1))
+        return 0
+    fi
+    uid="$owner"
+    while read_find_path vol; do
+        # /Volumes/Macintosh HD normally links to /. Never follow mount aliases.
+        [ ! -L "$vol" ] && [ -d "$vol" ] || continue
+        guard_mutation_target "$vol" || continue
+        if [ "$TEST_MODE" -eq 0 ]; then
+            volume_device="$(trash_stat_number %d "$vol")" || volume_device=''
+            parent_device="$(trash_stat_number %d "${vol%/*}")" || parent_device=''
+            if [ -z "$volume_device" ] || [ -z "$parent_device" ]; then
+                log_warn "cannot identify mounted volume: $vol"
+                [ "$DRY_RUN" -eq 1 ] || FAILED_COUNT=$((FAILED_COUNT + 1))
+                continue
+            fi
+            [ "$volume_device" != "$parent_device" ] || continue
+        fi
+        trash="$vol/.Trashes/$uid"
+        guard_mutation_target "$trash" || continue
+        [ -d "$trash" ] || continue
+        owner_on_volume="$(trash_stat_number %u "$trash")" || owner_on_volume=''
+        if [ "$owner_on_volume" != "$uid" ]; then
+            log_warn "refusing Trash with a different owner: $trash"
+            [ "$DRY_RUN" -eq 1 ] || FAILED_COUNT=$((FAILED_COUNT + 1))
+            continue
+        fi
+        if [ "$DRY_RUN" -eq 1 ]; then
+            log_debug "[DRY RUN] would empty mounted-volume Trash as UID $uid: $trash"
+            CLEANED_COUNT=$((CLEANED_COUNT + 1))
+            continue
+        fi
+        # Drop privileges using the known home owner. Pin the physical Trash
+        # directory, then delete without following links or crossing mounts.
+        # shellcheck disable=SC2016 # evaluated in the owner-UID child shell
+        if run_target_command "$h/" /bin/sh -c '
+            cd -P "$1" || exit 1
+            [ "$(pwd -P)" = "$1" ] || exit 1
+            exec /usr/bin/find . -xdev -depth -mindepth 1 -delete
+        ' sh "$trash" 2>/dev/null; then
+            CLEANED_COUNT=$((CLEANED_COUNT + 1))
+            log_debug "emptied mounted-volume Trash: $trash"
+        else
+            FAILED_COUNT=$((FAILED_COUNT + 1))
+            log_warn "failed to empty mounted-volume Trash: $trash"
+        fi
+    done < <(find_checked "$SANDBOX/Volumes" -mindepth 1 -maxdepth 1 -print0)
+    return 0
+}
+
 module_trash() {
     local u h uid
     while IFS=$'\t' read -r u h uid; do
@@ -1537,6 +1609,9 @@ module_trash() {
             # clear_dir_contents enumerates dotfiles too, so hidden Trash
             # entries are removed as well.
             clear_dir_contents "$h/.Trash"
+        fi
+        if [ "$INCLUDE_VOLUMES" -eq 1 ]; then
+            clean_volume_trash_for_home "$h" "$uid"
         fi
     done < <(enumerate_users)
     return 0

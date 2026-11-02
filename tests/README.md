@@ -174,6 +174,12 @@ extension state, symlinked stores, WAL links, and recovery copies must fail clos
 
 ## CI integration
 
+`volume-trash.sh` checks opt-in volume cleanup, hidden entries, UID scope,
+dry-run stability, repeated cleanup, symlink refusal, owner mismatches,
+permission failures, and the native mounted-filesystem check. All writes use
+temporary sandboxes; the native branch uses metadata injection and does not
+delete host data.
+
 On any phase failure `run-tests.sh` copies logs, manifests and the full
 sandbox trees to `tests-last-run/` at the repo root — upload that directory as
 a build artifact to debug failures. Example GitHub Actions step:
